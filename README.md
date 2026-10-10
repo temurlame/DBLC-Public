@@ -12,13 +12,35 @@ These screenshots use a fictional demonstration campaign and an original generat
 
 ## What DBLC includes
 
-- **Chronicle:** streamed GM narration, Markdown, player dice rolls, NPC speaker identities and optional presentation effects.
-- **Campaign workspace:** multiple campaigns and Sessions, disposable Workbenches with Review & End, summaries, campaign time and calendars, Agenda, Open Threads and the optional Surprise Machine.
-- **GM records and tools:** Player Sheet proposals with approval, GM Notes, NPC and Bestiary records, campaign search, and tools for reading or updating supported records. The GM can search and read campaign history and records without automatically loading everything into context.
-- **Rules and references:** user-selected local PDFs and optional Book Companion JSON provide searchable catalogues and on-demand passages. DBLC does not bundle rulebooks or companions; import only material you have permission to use. The GM should read the relevant source before presenting a rules-based answer.
-- **Imported maps:** import PNG, JPEG or WebP images into a campaign, then view, zoom and pan them. A vision-capable model can inspect an opened map when the local server supports image input. Maps are loaded on demand.
-- **Six starter Skills:** `rules-research`, `rules-adjudication`, `combat`, `advancement`, `campaign-memory` and `npc-portrayal`. They are optional local `SKILL.md` instructions: the GM can discover and load one when useful. See the [Skills guide](docs/skills/README.md) to add or edit skills.
-- **Optional mobile interface:** DBLC can host a responsive browser view for the same campaign. Remote access is disabled by default and must be deliberately configured.
+### Chronicle and play
+
+- **Live Chronicle:** streamed GM narration, Markdown, player messages and image attachments, manual dice rolls, and a searchable/retrievable campaign history.
+- **Character Speakers:** GM responses can identify NPC dialogue with speaker names and saved portraits. Optional narration fonts and presentation effects can be configured for the Chronicle.
+- **Campaigns and Sessions:** keep multiple campaigns and Sessions, summarize or end a Session, carry a saved summary into the next Session, duplicate or export a Chronicle, and browse archived history.
+- **Workbenches:** open a disposable conversation alongside a Session for out-of-character planning. Temporary context compaction helps long Workbenches continue; Review & End lets you approve specific notes or Chronicle facts for retention, while Discard leaves the parent Session unchanged.
+- **Dice roller:** roll supported dice into the Chronicle, or select a die for the next roll without immediately recording a result.
+
+### Campaign workspace
+
+- **Player Sheet and Workspace Notes:** edit campaign documents with Markdown and embedded images. On desktop, either document can be opened in its own window and returned to the main workspace.
+- **GM Notes:** keep campaign-scoped house rules, procedures and rulings; search notes as needed; export them as versioned JSON or readable Markdown; and preview and confirm JSON imports. GM responses can show restrained links to notes actually retrieved or cited.
+- **NPC catalogue:** save NPC notes, portraits and portrayal cues; use Character Speakers to show an NPC as the voice of a GM response. Portraits can be positioned for display.
+- **Bestiary:** maintain campaign creature entries, notes, portraits and defeated counts. Proposed Player Sheet and Bestiary changes use review/approval flows.
+- **Agenda and campaign time:** schedule and review events, browse a month grid, use Gregorian or configured custom calendars, and let the GM advance the authoritative campaign clock when fictional time passes.
+- **Open Threads:** track unresolved campaign matters with player-visible or GM-private visibility.
+- **Surprise Machine:** an optional, configurable campaign pacing feature; it is disabled unless enabled in settings.
+
+### References and maps
+
+- **Rules library:** choose a local folder of PDFs. DBLC builds searchable book catalogues and a compact index from available metadata, then supplies requested passages on demand. Optional Book Companion JSON files add structured sections. The GM should consult source text before giving a rules-based answer.
+- **Source references:** when the GM cites material it actually retrieved, Chronicle references can point back to the relevant book passage, GM Note or archived Chronicle excerpt.
+- **Imported maps:** add PNG, JPEG or WebP maps to a campaign, manage their titles, and browse thumbnails. Open maps in a viewer with zoom and pan. A vision-capable model can inspect the original map image on request when the local server supports image input; maps are not automatically sent to the model.
+
+### Customization and access
+
+- **GM Profile and Skills:** customize the GM Profile and add, edit or remove ordinary `SKILL.md` files. Six starter Skills cover rules research, adjudication, combat, advancement, campaign memory and NPC portrayal; the GM discovers and loads them only when useful. See the [Skills guide](docs/skills/README.md).
+- **Desktop and mobile:** use DBLC's desktop workspace or optionally connect a responsive browser interface to the same desktop-hosted campaign. Mobile access is disabled by default and must be deliberately configured.
+- **Desktop convenience and privacy:** optionally keep DBLC running in the system tray when its window closes, and require a local PIN when opening the app or restoring it from the tray. These controls are local application features, not a hosted account or cloud service.
 
 DBLC supplies tabletop tools, not a rules engine. The selected model and its chat template determine how reliably it follows instructions and calls tools. Some features, including image inspection, require model/server support.
 
