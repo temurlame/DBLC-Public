@@ -1,0 +1,50 @@
+# Build outputs and IDE state
+**/bin/
+**/obj/
+.vs/
+*.user
+*.suo
+outputs/
+
+# Local runtime data: keep campaign/session content and databases out of source control
+state.json
+state.json.*
+settings.json
+settings.json.*
+campaigns/
+archives/
+Library/
+GM Notes/
+local-data/
+private-data/
+ReferenceBooks/
+BookCompanions/
+**/BookCompanions/
+*.pdf
+*.book-companion.json
+*.bookcompanion.json
+*BookCompanion*.json
+*book-companion*.json
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Local secrets and credentials
+.env
+.env.*
+secrets.json
+secrets.*.json
+*.pfx
+*.p12
+
+# Scratch, editor attachments, and local development files
+work/
+.codex-remote-attachments/
+legacy-state.json
+chronicle-archive.db
+*.db-journal
+/skills/
+/codex/

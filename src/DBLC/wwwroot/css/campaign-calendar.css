@@ -1,0 +1,80 @@
+.campaign-date-time-settings {
+    display: grid;
+    gap: 11px;
+}
+
+.calendar-mode-field,
+.calendar-anchor-field {
+    display: grid;
+    gap: 6px;
+    color: #929397;
+    font: 8px 'DM Mono', monospace;
+    letter-spacing: .8px;
+}
+
+.calendar-mode-field select,
+.calendar-anchor-field input,
+.calendar-current-date-grid input,
+.calendar-custom-fields textarea {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    padding: 8px 9px;
+    border: 1px solid #36373a;
+    border-radius: 4px;
+    background: #191a1c;
+    color: #d6d7d9;
+    font: 10px 'DM Sans', Segoe UI, sans-serif;
+    letter-spacing: 0;
+}
+
+.calendar-mode-field select:focus,
+.calendar-anchor-field input:focus,
+.calendar-current-date-grid input:focus,
+.calendar-custom-fields textarea:focus {
+    outline: 0;
+    border-color: #65666a;
+}
+
+.calendar-custom-fields {
+    display: grid;
+    gap: 11px;
+}
+
+.calendar-custom-fields > label {
+    display: grid;
+    gap: 6px;
+    color: #929397;
+    font: 8px 'DM Mono', monospace;
+    letter-spacing: .8px;
+}
+
+.calendar-custom-fields textarea {
+    min-height: 76px;
+    resize: vertical;
+    line-height: 1.5;
+}
+
+.calendar-current-date-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+}
+
+.calendar-current-date-grid label {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+    color: #929397;
+    font: 8px 'DM Mono', monospace;
+    letter-spacing: .6px;
+}
+
+.calendar-current-date-grid .calendar-era-field {
+    grid-column: 1 / -1;
+}
+
+.campaign-date-time-settings > .surprise-note,
+.calendar-custom-fields > .surprise-note {
+    margin: -3px 0 0;
+}

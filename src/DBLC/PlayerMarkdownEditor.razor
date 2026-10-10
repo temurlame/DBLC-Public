@@ -1,0 +1,116 @@
+@inject IJSRuntime JS
+@inject PlayerImageAssetStore ImageAssets
+@using Microsoft.AspNetCore.Components.Forms
+@implements IAsyncDisposable
+
+<div class="player-markdown-edit-wrap">
+    <div class="player-markdown-edit-tools">@if (BrowserHost) { <label class="outline-button mobile-file-button">＋ Image<InputFile accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" OnChange="ChooseBrowserImage" /></label> } else { <button type="button" class="outline-button" @onclick="ChooseImage">＋ Image</button> }<span>Drop or paste an image into the sheet</span>@if (!string.IsNullOrWhiteSpace(Status)) { <span class="player-image-status">@Status</span> }</div>
+    <div class="player-markdown-canvas" @ref="EditorElement" role="textbox" aria-multiline="true" aria-label="Player Markdown editor"></div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Markdown { get; set; } = "";
+    [Parameter] public Guid CampaignId { get; set; }
+    [Parameter] public EventCallback<string> MarkdownChanged { get; set; }
+    [Parameter] public EventCallback<string> ChroniclePortraitSelected { get; set; }
+    [Parameter] public bool BrowserHost { get; set; }
+    private ElementReference EditorElement;
+    private DotNetObjectReference<PlayerMarkdownEditor>? _reference;
+    private string _syncedMarkdown = "";
+    private Guid _syncedCampaignId;
+    private string? _lastEditorMarkdown;
+    private bool _initialized;
+    private string Status = "";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_initialized)
+        {
+            _reference = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("playerMarkdownEditor.initialize", EditorElement, _reference, Markdown, ImageAssets.LoadReferenced(CampaignId, Markdown));
+            _syncedMarkdown = Markdown;
+            _syncedCampaignId = CampaignId;
+            _initialized = true;
+            return;
+        }
+        if (CampaignId == _syncedCampaignId && Markdown == _syncedMarkdown) return;
+        if (CampaignId == _syncedCampaignId && Markdown == _lastEditorMarkdown) { _syncedMarkdown = Markdown; return; }
+        await JS.InvokeVoidAsync("playerMarkdownEditor.update", EditorElement, Markdown, ImageAssets.LoadReferenced(CampaignId, Markdown));
+        _syncedMarkdown = Markdown;
+        _syncedCampaignId = CampaignId;
+    }
+
+    [JSInvokable]
+    public async Task MarkdownEdited(string markdown)
+    {
+        try { ImageAssets.DeleteUnreferenced(CampaignId, _syncedMarkdown, markdown); } catch { }
+        _syncedMarkdown = markdown;
+        _lastEditorMarkdown = markdown;
+        Status = "";
+        await MarkdownChanged.InvokeAsync(markdown);
+    }
+
+    [JSInvokable]
+    public PlayerImageAsset ImageDropped(string fileName, string base64)
+    {
+        try
+        {
+            var bytes = Convert.FromBase64String(base64);
+            return ImageAssets.Save(CampaignId, fileName, bytes);
+        }
+        catch (Exception ex) { Status = ex.Message; _ = InvokeAsync(StateHasChanged); throw; }
+    }
+
+    [JSInvokable]
+    public void ImageFrameChanged(string path, double x, double y, double zoom)
+    {
+        ImageAssets.SaveFrame(CampaignId, path, new PlayerImageFrame(x, y, zoom));
+    }
+
+    [JSInvokable]
+    public async Task SetChroniclePortrait(string path)
+    {
+        await ChroniclePortraitSelected.InvokeAsync(path);
+        Status = "Chronicle portrait selected.";
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public void ImageDropFailed(string message) { Status = message; _ = InvokeAsync(StateHasChanged); }
+
+    private async Task ChooseImage()
+    {
+        using var dialog = new System.Windows.Forms.OpenFileDialog { Title = "Add an image to the Player sheet", Filter = "Image files (*.png;*.jpg;*.jpeg;*.webp)|*.png;*.jpg;*.jpeg;*.webp|PNG image (*.png)|*.png|JPEG image (*.jpg;*.jpeg)|*.jpg;*.jpeg|WebP image (*.webp)|*.webp", CheckFileExists = true, Multiselect = false };
+        if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        try
+        {
+            var asset = ImageAssets.Save(CampaignId, Path.GetFileName(dialog.FileName), File.ReadAllBytes(dialog.FileName));
+            Status = "";
+            await JS.InvokeVoidAsync("playerMarkdownEditor.insertAtSelection", EditorElement, asset);
+        }
+        catch (Exception ex) { Status = ex.Message; }
+    }
+
+    private async Task ChooseBrowserImage(InputFileChangeEventArgs args)
+    {
+        if (!BrowserHost) return;
+        try
+        {
+            var file = args.File;
+            if (file.Size is <= 0 or > 20L * 1024 * 1024) throw new InvalidDataException("Choose an image smaller than 20 MB.");
+            await using var stream = file.OpenReadStream(20L * 1024 * 1024);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            var asset = ImageAssets.Save(CampaignId, file.Name, buffer.ToArray());
+            Status = "";
+            await JS.InvokeVoidAsync("playerMarkdownEditor.insertAtSelection", EditorElement, asset);
+        }
+        catch (Exception ex) { Status = ex.Message; }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { if (_initialized) await JS.InvokeVoidAsync("playerMarkdownEditor.dispose", EditorElement); } catch { }
+        _reference?.Dispose();
+    }
+}

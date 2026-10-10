@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">DBLC sigil</title>
+  <g transform="translate(0 10)" font-family="Courier New, monospace" font-size="15.36" font-weight="700" xml:space="preserve">
+    <g fill="#737373">
+      <text x="23" y="18">          .</text>
+      <text x="23" y="35.6">          i,</text>
+      <text x="23" y="53.2">         :S.</text>
+      <text x="23" y="70.8">      . .iS.</text>
+      <text x="23" y="88.4">     .:iiHI.</text>
+      <text x="23" y="106">    ,i:  ,H</text>
+      <text x="23" y="123.6">..,+Hi..  .H:.</text>
+      <text x="23" y="141.2">   :I;   .H,</text>
+      <text x="23" y="158.8">   .,+;. .I.</text>
+      <text x="23" y="176.4">      .:;;I</text>
+      <text x="23" y="194">         ,i</text>
+      <text x="23" y="211.6">          +</text>
+      <text x="23" y="229.2">          ,</text>
+    </g>
+    <g fill="#e34b54">
+      <text x="133" y="18">  .</text>
+      <text x="133" y="35.6"> .i.</text>
+      <text x="133" y="53.2"> .S:</text>
+      <text x="133" y="70.8"> Hi. .</text>
+      <text x="133" y="88.4"> IIii:.</text>
+      <text x="133" y="106">.H,  :i,</text>
+      <text x="133" y="123.6">   i. .iHi:..</text>
+      <text x="133" y="141.2">  I.   +I;</text>
+      <text x="133" y="158.8">  H. .;+,</text>
+      <text x="133" y="176.4">  I:;:.</text>
+      <text x="133" y="194">  I,</text>
+      <text x="133" y="211.6">  ;</text>
+      <text x="133" y="229.2">  ,</text>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,823 @@
+@page "/"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
+@implements IDisposable
+@inject AppState State
+@inject LlamaClient Client
+@inject LlamaModelInfoClient ModelInfo
+@inject MobileUiDispatcher Ui
+@inject PaperDocumentState Paper
+@inject IJSRuntime JS
+@inject ChronicleImageAssetStore ChronicleImages
+@inject PlayerImageAssetStore PlayerImages
+@inject NpcPortraitStore PortraitStore
+
+<main class="mobile-shell">
+    <header class="mobile-header">
+        <button class="mobile-icon-button" aria-label="Campaigns and Sessions" title="Campaigns and Sessions" @onclick="OpenNavigation"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button>
+        <div class="mobile-title"><strong>DBLC</strong><span>@(State.ActiveCampaign?.Name ?? "Campaign") · Session @(State.Current?.SessionNumber ?? 1)@(State.Current?.IsWorkbench == true ? " · Workbench" : "")</span></div>
+        <button class="mobile-icon-button" aria-label="Your Desk" title="Your Desk" @onclick="() => DeskOpen = true"><svg viewBox="0 0 24 24"><path d="M4 5.5h6.5c1 0 1.5.5 1.5 1.5v12c0-1-1-1.5-2-1.5H4zM20 5.5h-6.5c-1 0-1.5.5-1.5 1.5v12c0-1 1-1.5 2-1.5h6z" /></svg></button>
+    </header>
+
+    @if (ActiveSpace == "Table")
+    {
+    <section class="mobile-chronicle-viewport">
+        <div class="messages mobile-messages @(NeedsInitialPosition ? "chronicle-positioning" : "")" style="--chronicle-text-scale: @State.ChronicleTextScaleCss" @ref="MessagesElement">
+            <div class="messages-content">
+                @if (!string.IsNullOrWhiteSpace(State.Current?.OpeningSummary))
+                {
+                    <article class="session-opening-summary"><div class="session-opening-heading">PREVIOUS SESSION · @(State.Current?.PreviousSessionNumber ?? 0)</div><div><ChronicleText Text="@State.Current!.OpeningSummary" /></div></article>
+                }
+                @if (_chronicle.Lines.Count == 0)
+                {
+                    <div class="welcome-card"><div class="welcome-mark"><GmThinkingSigil Size="144" Label="DBLC" /></div><div class="eyebrow">THE TABLE IS YOURS</div><h2>What happens next?</h2><p>Ask your GM anything. It can inspect the book catalogue and request pages when it needs them.</p></div>
+                }
+                @foreach (var line in _chronicle.Lines)
+                {
+                    if (line.Role == "archive")
+                    {
+                        <article class="archive-summary-card"><div class="archive-summary-heading"><span>✧</span><span>ARCHIVED CHRONICLE SUMMARY</span><small>Original lines preserved locally</small></div><div class="archive-summary-content"><ChronicleText Text="@line.Content" /></div></article>
+                    }
+                    else if (line.EntryType == "campaign_record")
+                    {
+                        <article class="campaign-record-message"><div class="campaign-record-label">CAMPAIGN RECORD</div><div class="campaign-record-content message-content"><ChronicleText Text="@line.Content" /></div></article>
+                    }
+                    else
+                    {
+                        <article @key="line.Id" class="message @(line.Role == "user" ? "user-message" : "gm-message")">
+                            @if (line.Role != "assistant" || line.PresentationSegments is not { Count: > 0 }) {
+                                    <div class="avatar">
+                                @if (line.Role == "user" && CurrentPlayerPortrait is { } playerPortrait) { <img src="@playerPortrait.DataUrl" alt="" style="@PlayerIdentityImageStyle(playerPortrait.Frame)" /> }
+                                else if (line.Role == "user" && !string.IsNullOrWhiteSpace(CurrentPlayerName)) { @IdentityInitial(CurrentPlayerName) }
+                                else { @(line.Role == "user" ? State.PlayerMark : line.GmMark ?? State.GetGmMark(State.Model)) }
+                            </div>
+                                    }
+                            <div class="message-body">
+                                @if (line.Role == "assistant" && line.PresentationSegments is { Count: > 0 } segments)
+                                {
+                                    @for (var i = 0; i < segments.Count; i++)
+                                    {
+                                        var segment = segments[i];
+                                        var showSpeakerHeader = i == 0 || !string.Equals(segments[i - 1].Speaker, segment.Speaker, StringComparison.OrdinalIgnoreCase);
+                                        var speakerNpc = ResolveSpeakerNpc(segment);
+                                        var speakerPortrait = speakerNpc is null ? null : PortraitStore.BrowserImageUrl(State.Current!.CampaignId, speakerNpc.Id, speakerNpc.PortraitExtension);
+                                        var liveGmResponse = State.Busy && line.Role == "assistant" && _chronicle.Lines.LastOrDefault()?.Id == line.Id;
+                                        <div class="gm-expression-segment">
+                                            @if (showSpeakerHeader)
+                                            {
+                                                <div class="avatar speaker-avatar">
+                                                    @if (string.Equals(segment.Speaker, "GM", StringComparison.OrdinalIgnoreCase)) { @(line.GmMark ?? State.GetGmMark(State.Model)) }
+                                                    else if (speakerPortrait is not null) { <img src="@speakerPortrait" alt="" style="@NpcSpeakerPortraitStyle(speakerNpc!)" /> }
+                                                    else { @IdentityInitial(segment.Speaker) }
+                                                </div>
+                                            }
+                                            else { <div class="avatar speaker-avatar speaker-avatar-spacer" aria-hidden="true"></div> }
+                                            <div class="gm-expression-content">
+                                                @if (showSpeakerHeader) { <div class="message-meta speaker-meta"><span>@(string.Equals(segment.Speaker, "GM", StringComparison.OrdinalIgnoreCase) ? "THE GM" : segment.Speaker)</span><span class="speaker-time">@(i == 0 ? line.DisplayTimestamp.ToLocalTime().ToString("h:mm tt") : "")</span></div> }
+                                                <div class="message-content @(MobileFlavorClass(segment.Flavor))" data-clean-text="@segment.Text"><ChronicleText @key="segment.Id" Text="@segment.Text" Flavor="@segment.Flavor" Seed="@segment.GlitchSeed" StableKey="@($"{line.Id:N}:{segment.Id:N}")" FlavorsEnabled="@State.GmFlavorFontsEnabled" AnimationsEnabled="@State.GmStreamAnimationsEnabled" DefaultEffect="@State.GmStreamDefaultEffect" InlineEffectsEnabled="@State.GmInlineStreamEffectsEnabled" EffectSpans="@segment.NarrationEffectSpans" IsLiveResponse="@liveGmResponse" /></div>
+                                            </div>
+                                        </div>
+                                    }
+                                }
+                                else
+                                {
+                                    var liveGmResponse = State.Busy && line.Role == "assistant" && _chronicle.Lines.LastOrDefault()?.Id == line.Id;
+                                    <div class="message-meta">@(line.Role == "user" ? (string.IsNullOrWhiteSpace(CurrentPlayerName) ? "YOU" : CurrentPlayerName) : "THE GM") <span>@line.DisplayTimestamp.ToLocalTime().ToString("h:mm tt")</span></div><div class="message-content">@if (line.RollSides is not null) { @line.RollDisplayText } else { <ChronicleText Text="@line.Content" StableKey="@($"{line.Id:N}:0")" AnimationsEnabled="@State.GmStreamAnimationsEnabled" DefaultEffect="@State.GmStreamDefaultEffect" InlineEffectsEnabled="@State.GmInlineStreamEffectsEnabled" EffectSpans="@line.NarrationEffectSpans" IsLiveResponse="@liveGmResponse" /> }</div>
+                                }
+                                @if (line.Role == "user" && line.ImageAttachmentKey is { } key && GetImage(line, key) is { } image)
+                                {
+                                    <button class="chronicle-image-attachment" type="button" title="View attached image" @onclick="() => OpenImage(image)"><img src="@image" alt="Image attached to this message" loading="lazy" /></button>
+                                }
+                                @if (line.Role == "assistant" && line.EntryType != ChatLine.TechnicalErrorEntryType && !string.IsNullOrWhiteSpace(line.Content) &&
+                                            line.Content != "(The model returned no text.)")
+                                {
+                                    <GmNoteReferences References="line.GmNoteReferences" Sources="line.SourceReferences" AllowPrivateSources="false" OnOpen="OpenGmNoteReference" OnOpenSource="OpenSourceReference" />
+                                }
+                            </div>
+                        </article>
+                    }
+                }
+                @if (State.Busy && (State.GmThinkingSigilEnabled || _chronicle.Lines.LastOrDefault()?.Content.Length == 0))
+                {
+                    <div class="typing">
+                        @if (State.GmThinkingSigilEnabled)
+                        {
+                            <GmThinkingSigil />
+                        }
+                        else
+                        {
+                            <span></span><span></span><span></span><em>@ActivityLabel</em>
+                        }
+                    </div>
+                }
+                @if (_chronicle.Lines.Count > 0) { <div class="scroll-anchor"></div> }
+            </div>
+        </div>
+        <button @ref="JumpButton" class="chronicle-jump-button" type="button" aria-label="Jump to latest" title="Jump to latest" aria-hidden="true" tabindex="-1" @onclick="JumpToLatest"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v15m-6-6 6 6 6-6" /></svg></button>
+    </section>
+
+    <div class="mobile-context"><div style="width:@ContextWidth"></div></div>
+    @if (!string.IsNullOrWhiteSpace(MobileSubmitError)) { <p class="player-update-error" role="status">@MobileSubmitError</p> }
+    <form class="mobile-composer" @ref="ComposerElement" @onsubmit="Submit" @onsubmit:preventDefault>
+        <textarea @ref="ComposerInputElement" @bind="Draft" @bind:event="oninput" rows="1" placeholder="@(State.Busy ? "Add a steer…" : "Message the GM…")" disabled="@(State.Busy && !State.CanSteerCurrentResponse || State.Current?.IsEnded == true)"></textarea>
+        <DiceRoller @bind-SelectedSides="SelectedDieSides" Compact="true" Disabled="@(State.Busy || _submitStarting || State.Current?.IsEnded == true)" ConversationId="@(State.Current?.Id)" OnRoll="RecordPlayerRoll" />
+        <button class="mobile-send" type="submit" aria-label="@(State.Busy && string.IsNullOrWhiteSpace(Draft) ? "Stop generation" : State.Busy ? "Steer the GM" : "Send")" disabled="@(State.Busy && !State.CanSteerCurrentResponse || State.Current?.IsEnded == true)">
+            @if (State.Busy && string.IsNullOrWhiteSpace(Draft)) { <svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> }
+            else { <svg viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6" /></svg> }
+        </button>
+    </form>
+    }
+    else
+    {
+        <div class="mobile-space-host-container">
+            <AppShell MobileHost="true" MobileSection="@ActiveSpace" FocusedGmNoteId="@FocusedGmNoteId" OnMobileClose="ReturnToTable" />
+        </div>
+    }
+
+    @if (NavigationOpen)
+    {
+        <div class="mobile-overlay" @onclick="CloseNavigation">
+            <nav @ref="NavigationDrawer" class="mobile-drawer" aria-label="Campaign and Session navigation" @onclick:stopPropagation>
+                <div class="mobile-panel-heading"><div><div class="eyebrow">CAMPAIGNS</div><h2>Choose a campaign</h2></div><button class="mobile-icon-button" aria-label="Close" @onclick="CloseNavigation">×</button></div>
+                @if (!string.IsNullOrWhiteSpace(MobileNavigationError)) { <p class="player-update-error" role="status">@MobileNavigationError</p> }
+                <button class="mobile-nav-row mobile-table-link" @onclick="ReturnToTable">Table · Return to Chronicle</button>
+                @foreach (var campaign in State.Campaigns)
+                {
+                    <button class="mobile-nav-row @(campaign.Id == State.ActiveCampaignId ? "selected" : "")" @onclick="() => SelectCampaign(campaign.Id)">@campaign.Name</button>
+                }
+                <div class="mobile-panel-heading mobile-session-heading"><div><div class="eyebrow">SESSIONS · @State.ActiveConversations.Count()</div><h2>@State.ActiveCampaign?.Name</h2></div><button class="mobile-small-button" disabled="@State.Busy" @onclick="CreateSession">＋ New</button></div>
+                @foreach (var session in State.ActiveConversations)
+                {
+                    <div class="mobile-session-row" data-mobile-session-id="@session.Id.ToString("N")">
+                        <button class="mobile-nav-row @(session.Id == State.Current?.Id ? "selected" : "")" @onclick="() => SelectSession(session.Id)"><small>SESSION @(session.SessionNumber ?? 1)@(session.IsEnded ? " · ENDED" : "")</small><span>@session.Title</span></button>
+                        <button class="mobile-session-options" type="button" aria-label="Options for Session @(session.SessionNumber ?? 1): @session.Title" title="Session options" @onclick="() => OpenMobileSessionMenu(session)">⋯</button>
+                    </div>
+                    @foreach (var workbench in State.GetWorkbenches(session.Id))
+                    {
+                        <button class="mobile-nav-row mobile-workbench-row @(workbench.Id == State.Current?.Id ? "selected" : "")" @onclick="() => SelectSession(workbench.Id)">└─ @workbench.Title</button>
+                    }
+                }
+                @if (State.Current is { IsWorkbench: true } && !State.Busy)
+                {
+                    <div class="mobile-workbench-actions">
+                        <button class="mobile-session-action" @onclick="RequestMobileWorkbenchExit" disabled="@(State.Busy || State.WorkbenchExitReviewBusy)">@(State.WorkbenchExitReviewPreparing ? "Checking…" : "Review & End")</button>
+                        <button class="mobile-session-action danger-action" @onclick="DiscardMobileWorkbenchNow" disabled="@(State.Busy || State.WorkbenchExitReviewBusy)">Discard &amp; Exit</button>
+                    </div>
+                }
+                @if (State.Current is { IsWorkbench: false, IsEnded: false } && !State.Busy)
+                {
+                    <div class="mobile-workbench-create"><input @bind="WorkbenchName" maxlength="80" placeholder="Workbench name" /><button class="mobile-small-button" @onclick="CreateWorkbench">Create Workbench</button></div>
+                }
+            </nav>
+        </div>
+    }
+
+    @if (MobileMenuSession is { } menuSession)
+    {
+        <div class="mobile-session-menu-backdrop" @onclick="CloseMobileSessionMenu">
+            <section class="mobile-session-menu" role="dialog" aria-modal="true" aria-label="Session options" @onclick:stopPropagation>
+                <div class="mobile-sheet-handle"></div>
+                <div class="mobile-panel-heading"><div><div class="eyebrow">SESSION @(menuSession.SessionNumber ?? 1)@(menuSession.IsEnded ? " · ENDED" : "")</div><h2>@menuSession.Title</h2></div><button class="mobile-icon-button" aria-label="Close Session options" @onclick="CloseMobileSessionMenu">×</button></div>
+                @if (menuSession.Id == State.Current?.Id && !menuSession.IsWorkbench && !menuSession.IsEnded)
+                {
+                    <button class="mobile-session-action" disabled="@(State.Busy || MobileSessionActionBusy)" @onclick="() => RunMobileSessionSummary(endAfterSummary: false)">@(MobileSessionActionBusy && !MobileEndingSession ? "Summarizing…" : "Summarize Session")</button>
+                    <button class="mobile-session-action danger-action" disabled="@(State.Busy || MobileSessionActionBusy)" @onclick="() => RunMobileSessionSummary(endAfterSummary: true)">@(MobileSessionActionBusy && MobileEndingSession ? "Ending…" : "End Session")</button>
+                    @if (!string.IsNullOrWhiteSpace(MobileSessionActionError)) { <p class="player-update-error" role="status">@MobileSessionActionError</p> }
+                }
+                <button class="mobile-session-action" @onclick="BeginMobileRename">Rename</button>
+                <button class="mobile-session-action" disabled="@(State.Busy || MobileSessionActionBusy)" @onclick="DuplicateMobileSession">Duplicate</button>
+                <button class="mobile-session-action" @onclick="ExportMobileSession">Export Chronicle</button>
+                <button class="mobile-session-action danger-action" disabled="@State.Busy" @onclick="ConfirmMobileDelete">Delete Session</button>
+            </section>
+        </div>
+    }
+    @if (MobileRenamingSession is { } renameSession)
+    {
+                <div class="mobile-session-dialog-backdrop" @onclick="CancelMobileRename"><section class="mobile-session-dialog" role="dialog" aria-modal="true" aria-label="Rename Session" @onclick:stopPropagation><div class="eyebrow">SESSION @(renameSession.SessionNumber ?? 1)</div><h2>Rename Session</h2><input @bind="MobileRenameDraft" @bind:event="oninput" maxlength="120" aria-label="Session name" @onkeydown="HandleMobileRenameKey" /><div class="mobile-session-dialog-actions"><button class="mobile-session-action" @onclick="CancelMobileRename">Cancel</button><button class="mobile-session-action" @onclick="SaveMobileRename">Save name</button></div></section></div>
+    }
+    @if (MobileDeletingSession is { } deleteSession)
+    {
+        <div class="mobile-session-dialog-backdrop" @onclick="CancelMobileDelete"><section class="mobile-session-dialog" role="dialog" aria-modal="true" aria-label="Confirm Session deletion" @onclick:stopPropagation><div class="eyebrow">SESSION @(deleteSession.SessionNumber ?? 1)</div><h2>Delete this Session?</h2><p>“@deleteSession.Title” and its Chronicle will be deleted. This can't be undone.</p><div class="mobile-session-dialog-actions"><button class="mobile-session-action" @onclick="CancelMobileDelete">Cancel</button><button class="mobile-session-action danger-action" @onclick="DeleteMobileSession">Delete Session</button></div></section></div>
+    }
+
+    @if (DeskOpen)
+    {
+        <div class="mobile-sheet-backdrop" @onclick="CloseDesk">
+            <section class="mobile-desk-sheet" role="dialog" aria-modal="true" aria-label="Your Desk" @onclick:stopPropagation>
+                <div class="mobile-sheet-handle"></div><div class="mobile-panel-heading"><div><div class="eyebrow">DBLC · REFERENCE</div><h2>Your Desk</h2></div><button class="mobile-icon-button" aria-label="Close Your Desk" @onclick="CloseDesk">×</button></div>
+                <div class="mobile-desk-grid">
+                    @foreach (var deskEntry in DeskSections)
+                    {
+                        var sectionTitle = deskEntry.Available ? deskEntry.Name : "Available in the next mobile interface stage";
+                        <button class="mobile-desk-item @(ActiveSpace == deskEntry.Name ? "selected" : "")" @onclick="() => OpenDeskSection(deskEntry.Name)" title="@sectionTitle"><span>@((MarkupString)deskEntry.Icon)</span><small>@deskEntry.Name</small></button>
+                    }
+                </div>
+                <p class="mobile-desk-note">These spaces use the same campaign data and tools as DBLC on this PC.</p>
+            </section>
+        </div>
+    }
+
+    @if (ShowImageViewer && ViewerDataUrl is { } dataUrl)
+    {
+        <div class="mobile-image-viewer" role="dialog" aria-modal="true" @onclick="CloseImage"><button aria-label="Close image" @onclick="CloseImage">×</button><img src="@dataUrl" alt="Chronicle attachment" /></div>
+    }
+
+    @if (ActiveSpace == "Table" && State.PendingPlayerUpdate is { } playerProposal)
+    {
+        <div class="mobile-approval-backdrop">
+            <section class="mobile-approval-dialog" role="dialog" aria-modal="true" aria-label="Review Player Sheet update">
+                <div class="mobile-panel-heading"><div><div class="eyebrow">PLAYER SHEET UPDATE</div><h2>Review proposed update</h2></div></div>
+                <div class="mobile-review-switch" role="tablist" aria-label="Player Sheet versions">
+                    <button role="tab" aria-selected="@(MobilePlayerReviewUpdated == false)" class="@(MobilePlayerReviewUpdated ? "" : "selected")" @onclick="() => MobilePlayerReviewUpdated = false">Original</button>
+                    <button role="tab" aria-selected="@MobilePlayerReviewUpdated" class="@(MobilePlayerReviewUpdated ? "selected" : "")" @onclick="() => MobilePlayerReviewUpdated = true">Updated</button>
+                </div>
+                <div class="mobile-approval-document markdown-preview">
+                    @if (MobilePlayerReviewUpdated)
+                    {
+                        @((MarkupString)PlayerMarkdownRenderer.Render(playerProposal.UpdatedMarkdown, playerProposal.CampaignId, PlayerImages, interactive: false))
+                    }
+                    else if (string.IsNullOrWhiteSpace(playerProposal.OriginalMarkdown))
+                    {
+                        <p class="player-update-empty">Player Sheet is empty.</p>
+                    }
+                    else
+                    {
+                        @((MarkupString)PlayerMarkdownRenderer.Render(playerProposal.OriginalMarkdown, playerProposal.CampaignId, PlayerImages, interactive: false))
+                    }
+                </div>
+                @if (!string.IsNullOrWhiteSpace(MobilePlayerApprovalError)) { <p class="player-update-error">@MobilePlayerApprovalError</p> }
+                <div class="mobile-approval-actions"><button class="outline-button" @onclick="CancelMobilePlayerUpdate" disabled="@MobilePlayerApplying">Cancel</button><button class="primary-button small" @onclick="() => ApproveMobilePlayerUpdate(playerProposal)" disabled="@MobilePlayerApplying">@(MobilePlayerApplying ? "Saving…" : "Apply Update")</button></div>
+            </section>
+        </div>
+    }
+    @if (ActiveSpace == "Table" && State.PendingGmNote is { } gmNoteProposal)
+    {
+        <div class="mobile-approval-backdrop">
+            <section class="mobile-approval-dialog" role="dialog" aria-modal="true" aria-label="Review GM Note proposal">
+                <div class="mobile-panel-heading"><div><div class="eyebrow">CAMPAIGN NOTEBOOK</div><h2>Save this GM Note?</h2></div></div>
+                <p class="gm-note-proposal-copy">This will be saved as durable campaign reference.</p>
+                <div class="mobile-approval-document mobile-proposal-text">@gmNoteProposal.Text</div>
+                @if (!string.IsNullOrWhiteSpace(MobileGmNoteApprovalError)) { <p class="player-update-error">@MobileGmNoteApprovalError</p> }
+                <div class="mobile-approval-actions"><button class="outline-button" @onclick="CancelMobileGmNote">Cancel</button><button class="primary-button small" @onclick="() => ApproveMobileGmNote(gmNoteProposal)">Save GM Note</button></div>
+            </section>
+        </div>
+    }
+    @if (ActiveSpace == "Table" && State.PendingBestiaryProposal is { } bestiaryProposal)
+    {
+        <div class="mobile-approval-backdrop">
+            <section class="mobile-approval-dialog" role="dialog" aria-modal="true" aria-label="Review Bestiary proposal">
+                <div class="mobile-panel-heading"><div><div class="eyebrow">@(bestiaryProposal.IsCreate ? "ADD TO BESTIARY" : $"BESTIARY UPDATE · {bestiaryProposal.Updated.Name.ToUpperInvariant()}")</div><h2>@(bestiaryProposal.IsCreate ? bestiaryProposal.Updated.Name : "Review proposed card")</h2></div></div>
+                @if (bestiaryProposal.IsCreate)
+                {
+                    <div class="mobile-approval-document bestiary-create-preview"><BestiaryCardView Entry="bestiaryProposal.Updated" PortraitDataUrl="@PortraitStore.ReadBestiaryDataUrl(bestiaryProposal.CampaignId, bestiaryProposal.Updated.Id, bestiaryProposal.Updated.PortraitExtension)" Frame="@PortraitStore.ReadBestiaryFrame(bestiaryProposal.CampaignId, bestiaryProposal.Updated.Id, bestiaryProposal.Updated.PortraitExtension)" /></div>
+                }
+                else if (bestiaryProposal.Original is { } originalBestiary)
+                {
+                    <div class="mobile-review-switch" role="tablist" aria-label="Bestiary card versions"><button role="tab" aria-selected="@(MobileBestiaryReviewUpdated == false)" class="@(MobileBestiaryReviewUpdated ? "" : "selected")" @onclick="() => MobileBestiaryReviewUpdated = false">Original</button><button role="tab" aria-selected="@MobileBestiaryReviewUpdated" class="@(MobileBestiaryReviewUpdated ? "selected" : "")" @onclick="() => MobileBestiaryReviewUpdated = true">Updated</button></div>
+                    <div class="mobile-approval-document mobile-bestiary-review"><BestiaryCardView Entry="@(MobileBestiaryReviewUpdated ? bestiaryProposal.Updated : originalBestiary)" PortraitDataUrl="@PortraitStore.ReadBestiaryDataUrl(bestiaryProposal.CampaignId, originalBestiary.Id, originalBestiary.PortraitExtension)" Frame="@PortraitStore.ReadBestiaryFrame(bestiaryProposal.CampaignId, originalBestiary.Id, originalBestiary.PortraitExtension)" /></div>
+                }
+                @if (!string.IsNullOrWhiteSpace(MobileBestiaryApprovalError)) { <p class="player-update-error">@MobileBestiaryApprovalError</p> }
+                <div class="mobile-approval-actions"><button class="outline-button" @onclick="CancelMobileBestiary">Cancel</button><button class="primary-button small" @onclick="() => ApproveMobileBestiary(bestiaryProposal)">@(bestiaryProposal.IsCreate ? "Add to Bestiary" : "Apply Update")</button></div>
+            </section>
+        </div>
+    }
+    @if (State.PendingWorkbenchCreation is { } workbenchRequest)
+    {
+        <div class="mobile-approval-backdrop">
+            <section class="mobile-approval-dialog" role="dialog" aria-modal="true" aria-label="Workbench request">
+                <div class="mobile-panel-heading"><div><div class="eyebrow">GM REQUEST</div><h2>Open “@workbenchRequest.Name”?</h2></div></div>
+                <p>The GM would like to move this discussion into a temporary Workbench. Your Session Chronicle will stay separate.</p>
+                <div class="mobile-approval-actions"><button class="outline-button" @onclick="() => State.ResolveWorkbenchCreation(workbenchRequest.Id, false)">Stay in Session</button><button class="primary-button small" @onclick="() => State.ResolveWorkbenchCreation(workbenchRequest.Id, true)">Open Workbench</button></div>
+            </section>
+        </div>
+    }
+    @if (State.PendingWorkbenchExitReview is { } workbenchExit)
+    {
+        <div class="mobile-approval-backdrop">
+            <section class="mobile-approval-dialog" role="dialog" aria-modal="true" aria-label="Review Workbench exit">
+                <div class="mobile-panel-heading"><div><div class="eyebrow">@workbenchExit.Name</div><h2>End Workbench?</h2></div></div>
+                @if (workbenchExit.Artifacts.Count > 0)
+                {
+                    <div class="workbench-exit-label">ALREADY RETAINED</div>
+                    <ul class="workbench-artifacts">@foreach (var artifact in workbenchExit.Artifacts) { <li>✓ @artifact</li> }</ul>
+                }
+                <div class="mobile-approval-document">
+                    <div class="workbench-exit-label">RETAIN IN CHRONICLE</div>
+                    @if (workbenchExit.Retention.ChronicleFacts.Count == 0) { <p>No established fictional facts will be retained.</p> }
+                    else { @foreach (var fact in workbenchExit.Retention.ChronicleFacts) { <blockquote>@fact</blockquote> } }
+                    <div class="workbench-exit-label">GM NOTES</div>
+                    @if (workbenchExit.Retention.Notes.Count == 0) { <p>No GM Notes will be retained.</p> }
+                    else { @foreach (var note in workbenchExit.Retention.Notes) { <blockquote>@note</blockquote> } }
+                </div>
+                <p class="workbench-discard-copy">Saved campaign artifacts are unaffected. If you approve or discard, the Workbench will close after the GM reply completes.</p>
+                @if (!string.IsNullOrWhiteSpace(MobileWorkbenchExitError)) { <p class="player-update-error">@MobileWorkbenchExitError</p> }
+                <div class="mobile-approval-actions"><button class="outline-button" @onclick="() => CancelMobileWorkbenchExit(workbenchExit)">Cancel</button><button class="outline-button danger-action" @onclick="() => DiscardMobileWorkbenchFromReview(workbenchExit)">Discard &amp; Exit</button><button class="primary-button small" @onclick="() => ApproveMobileWorkbenchExit(workbenchExit)">@(workbenchExit.Retention.Notes.Count == 0 && workbenchExit.Retention.ChronicleFacts.Count == 0 ? "End & Return" : "End & Save")</button></div>
+            </section>
+        </div>
+    }
+</main>
+
+@code {
+    private MobileChronicleSnapshot _chronicle = new(null, []);
+    private string Draft = "";
+    private string ActiveSpace = "Table";
+    private Guid? FocusedGmNoteId;
+    private string WorkbenchName = "";
+    private bool NavigationOpen;
+    private bool DeskOpen;
+    private bool NeedsInitialPosition = true;
+    private bool _navigationPending = true;
+    private bool _resetToLatest = true;
+    private Guid? _observedSession;
+    private int _observedBusy;
+    private int _responseActivePending = -1;
+    private ElementReference MessagesElement;
+    private ElementReference JumpButton;
+    private ElementReference ComposerElement;
+    private ElementReference ComposerInputElement;
+    private ElementReference NavigationDrawer;
+    private bool _composerInstalled;
+    private bool _sessionLongPressInstalled;
+    private DotNetObjectReference<MobileShell>? _navigationReference;
+    private DotNetObjectReference<MobileShell>? _sessionMenuReference;
+    private Conversation? MobileMenuSession;
+    private Conversation? MobileRenamingSession;
+    private Conversation? MobileDeletingSession;
+    private string MobileRenameDraft = "";
+    private bool MobileSessionActionBusy;
+    private bool MobileEndingSession;
+    private string MobileSessionActionError = "";
+    private bool MobilePlayerReviewUpdated = true;
+    private bool MobileBestiaryReviewUpdated = true;
+    private bool MobilePlayerApplying;
+    private string MobileSubmitError = "";
+    private string MobileNavigationError = "";
+    private string MobilePlayerApprovalError = "";
+    private string MobileGmNoteApprovalError = "";
+    private string MobileBestiaryApprovalError = "";
+    private string MobileWorkbenchExitError = "";
+    private int _renderQueued;
+    private int _stateRevision;
+    private bool _disposed;
+    private bool ShowImageViewer;
+    private string? ViewerDataUrl;
+    private Guid? _imageSession;
+    private readonly Dictionary<string, string> _imageCache = new(StringComparer.OrdinalIgnoreCase);
+    private string ActivityLabel => State.Status == "Waiting for GM output…" ? "The GM is thinking…" : State.Status;
+    private string ContextWidth => State.Current?.LastContextTokens is { } tokens && (State.Current.ContextTokenLimit is > 0) ? $"{Math.Clamp(tokens * 100d / State.Current.ContextTokenLimit.Value, 0, 100):0.##}%" : "0%";
+    private static readonly (string Name, string Icon, bool Available)[] DeskSections =
+    [
+        ("Player", "<svg viewBox='0 0 24 24'><path d='M4 3.5h11l5 5V21H4zM15 3.5V9h5M8 13h8M8 17h8'/></svg>", true),
+        ("Workspace", "<svg viewBox='0 0 24 24'><path d='M4 4h16v16H4zM8 8h8M8 12h8M8 16h5'/></svg>", true),
+        ("NPCs", "<svg viewBox='0 0 24 24'><circle cx='9' cy='8' r='3'/><path d='M3.5 20v-1.5a5.5 5.5 0 0 1 11 0V20M16 5a3 3 0 0 1 0 6M17 15a4 4 0 0 1 3.5 4v1'/></svg>", true),
+        ("Library", "<svg viewBox='0 0 24 24'><path d='M4 5h6c1.2 0 2 .8 2 2v12c0-1.2-.8-2-2-2H4zM20 5h-6c-1.2 0-2 .8-2 2v12c0-1.2.8-2 2-2h6z'/></svg>", true),
+        ("Agenda", "<svg viewBox='0 0 24 24'><rect x='3.5' y='5' width='17' height='16' rx='2'/><path d='M7.5 3v4M16.5 3v4M4 9h16M8 13h3M8 17h6'/></svg>", true),
+        ("Bestiary", "<svg viewBox='0 0 24 24'><path d='M5 5 12 2l7 3v8c0 4-3 7-7 9-4-2-7-5-7-9zM8 10l2 1M14 11l2-1M9 15h6'/></svg>", true),
+        ("Maps", "<svg viewBox='0 0 24 24'><path d='m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3zM9 3v15M15 6v15'/></svg>", true),
+        ("Settings", "<svg viewBox='0 0 24 24'><circle cx='12' cy='12' r='3'/><path d='m19 13 2 1-2 4-2-1-2 1v2H9v-2l-2-1-2 1-2-4 2-1v-2l-2-1 2-4 2 1 2-1V4h6v2l2 1 2-1 2 4-2 1z'/></svg>", true)
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _observedSession = State.Current?.Id;
+        _observedBusy = State.Busy ? 1 : 0;
+        if (State.Busy) _responseActivePending = 1;
+        State.Changed += OnStateChanged;
+        var snapshotTimer = System.Diagnostics.Stopwatch.StartNew();
+        _chronicle = await Ui.InvokeAsync(() => MobileChronicleSnapshot.Capture(State.Current));
+        new GmRequestDiagnostics().RecordMobileSnapshot("initial", snapshotTimer.Elapsed, _chronicle.Lines.Count);
+    }
+
+    private void OnStateChanged()
+    {
+        if (_disposed) return;
+        Interlocked.Increment(ref _stateRevision);
+        var busy = State.Busy ? 1 : 0;
+        if (Interlocked.Exchange(ref _observedBusy, busy) != busy)
+            Interlocked.Exchange(ref _responseActivePending, busy);
+        if (_observedSession != State.Current?.Id)
+        {
+            _observedSession = State.Current?.Id;
+            _navigationPending = true;
+            _resetToLatest = true;
+            NeedsInitialPosition = true;
+        }
+        QueueRender();
+    }
+
+    private void QueueRender()
+    {
+        if (_disposed || Interlocked.Exchange(ref _renderQueued, 1) != 0) return;
+        _ = RenderAfterCoalescingAsync();
+    }
+
+    private async Task RenderAfterCoalescingAsync()
+    {
+        await Task.Delay(30);
+        if (_disposed) { Interlocked.Exchange(ref _renderQueued, 0); return; }
+        var revision = Volatile.Read(ref _stateRevision);
+        var snapshotTimer = System.Diagnostics.Stopwatch.StartNew();
+        var snapshot = await Ui.InvokeAsync(() => MobileChronicleSnapshot.Capture(State.Current));
+        await InvokeAsync(() =>
+        {
+            Interlocked.Exchange(ref _renderQueued, 0);
+            if (_disposed) return;
+            if (_chronicle.SessionId != snapshot.SessionId)
+                new GmRequestDiagnostics().RecordMobileSnapshot("session_switch", snapshotTimer.Elapsed, snapshot.Lines.Count);
+            _chronicle = snapshot;
+            StateHasChanged();
+            // A final state change can arrive while the dispatcher snapshot is in flight.
+            if (revision != Volatile.Read(ref _stateRevision)) QueueRender();
+        });
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (NavigationOpen && !_sessionLongPressInstalled)
+        {
+            _sessionMenuReference ??= DotNetObjectReference.Create(this);
+            try { await JS.InvokeVoidAsync("installMobileSessionLongPress", NavigationDrawer, _sessionMenuReference); _sessionLongPressInstalled = true; }
+            catch { _sessionLongPressInstalled = false; }
+        }
+        if (!_composerInstalled)
+        {
+            _composerInstalled = true;
+            if (ActiveSpace == "Table")
+            {
+                try { await JS.InvokeVoidAsync("installMobileComposer", ComposerElement, ComposerInputElement, MessagesElement); }
+                catch { _composerInstalled = false; }
+            }
+        }
+        if (ActiveSpace == "Table" && _navigationPending && State.Current is { } current)
+        {
+            _navigationPending = false;
+            var reset = _resetToLatest;
+            _resetToLatest = false;
+            _navigationReference ??= DotNetObjectReference.Create(this);
+            try { await JS.InvokeVoidAsync("installChronicleNavigation", MessagesElement, JumpButton, _navigationReference, current.Id.ToString("N"), reset); }
+            catch { _navigationPending = true; }
+        }
+        if (ActiveSpace == "Table" && !_navigationPending) await ApplyChronicleResponseStateAsync();
+    }
+
+    [JSInvokable]
+    public Task ChronicleNavigationReady(string sessionKey)
+    {
+        if (State.Current?.Id.ToString("N") != sessionKey) return Task.CompletedTask;
+        NeedsInitialPosition = false;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private Task JumpToLatest() => JS.InvokeVoidAsync("jumpChronicleToLatest", MessagesElement).AsTask();
+
+    [JSInvokable]
+    public Task OpenMobileSessionMenuFromGesture(string sessionId)
+    {
+        var session = State.ActiveConversations.FirstOrDefault(item => item.Id.ToString("N") == sessionId);
+        if (session is not null) MobileMenuSession = session;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private void OpenNavigation() { NavigationOpen = true; _sessionLongPressInstalled = false; }
+    private void CloseNavigation() { NavigationOpen = false; _sessionLongPressInstalled = false; }
+    private void OpenMobileSessionMenu(Conversation session) => MobileMenuSession = session;
+    private void CloseMobileSessionMenu() => MobileMenuSession = null;
+    private void BeginMobileRename()
+    {
+        if (MobileMenuSession is not { } session) return;
+        MobileRenamingSession = session;
+        MobileRenameDraft = session.Title;
+        MobileMenuSession = null;
+    }
+    private void HandleMobileRenameKey(KeyboardEventArgs e) { if (e.Key == "Enter") SaveMobileRename(); else if (e.Key == "Escape") CancelMobileRename(); }
+    private void SaveMobileRename()
+    {
+        if (MobileRenamingSession is not { } session || string.IsNullOrWhiteSpace(MobileRenameDraft)) return;
+        session.Title = MobileRenameDraft.Trim();
+        session.UpdatedAt = DateTimeOffset.Now;
+        State.SaveSettings();
+        MobileRenamingSession = null;
+    }
+    private void CancelMobileRename() => MobileRenamingSession = null;
+    private async Task RunMobileSessionSummary(bool endAfterSummary)
+    {
+        if (MobileSessionActionBusy || State.Busy || MobileMenuSession is not { IsWorkbench: false, IsEnded: false } session
+            || State.Current?.Id != session.Id) return;
+        MobileSessionActionBusy = true;
+        MobileEndingSession = endAfterSummary;
+        MobileSessionActionError = "";
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var activeLines = session.Lines.Where(line => line.Role is "user" or "assistant").ToList();
+            string? summary;
+            if (activeLines.Count == 0 && string.IsNullOrWhiteSpace(session.ArchiveSummary))
+                summary = "No chronicle messages were recorded during this session.";
+            else if (endAfterSummary)
+                summary = await LlamaClient.TryGenerateSessionSummaryForEndAsync(async () =>
+                {
+                    string? model = null;
+                    try { model = await ModelInfo.GetModelIdAsync(State.Endpoint); } catch { }
+                    model ??= State.Model;
+                    return await Client.SummarizeSessionAsync(State.Endpoint, model, activeLines, session.ArchiveSummary, session.OpeningSummary);
+                });
+            else
+            {
+                string? model = null;
+                try { model = await ModelInfo.GetModelIdAsync(State.Endpoint); } catch { }
+                model ??= State.Model;
+                summary = await Client.SummarizeSessionAsync(State.Endpoint, model, activeLines, session.ArchiveSummary, session.OpeningSummary);
+            }
+            if (State.Current?.Id != session.Id)
+                throw new InvalidOperationException("The selected Session changed before the summary finished. Nothing was ended; reopen its options to try again.");
+            if (!string.IsNullOrWhiteSpace(summary)) State.SaveSessionSummary(session, summary);
+            else if (!endAfterSummary) throw new InvalidOperationException("The model returned an empty session summary.");
+            if (endAfterSummary)
+            {
+                State.EndSessionAndStartNext(session);
+                CloseMobileSessionMenu();
+                CloseNavigation();
+                _resetToLatest = true;
+            }
+        }
+        catch (Exception ex) { MobileSessionActionError = "Could not " + (endAfterSummary ? "end" : "summarize") + " Session: " + ex.Message; }
+        finally
+        {
+            MobileSessionActionBusy = false;
+            MobileEndingSession = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void DuplicateMobileSession()
+    {
+        if (MobileMenuSession is not { } session || State.Busy) return;
+        State.Duplicate(session);
+        MobileMenuSession = null;
+        CloseNavigation();
+    }
+    private async Task ExportMobileSession()
+    {
+        if (MobileMenuSession is not { } session) return;
+        var lines = State.GetCompleteChronicleLines(session);
+        var output = new StringBuilder();
+        output.Append("# Session ").Append(session.SessionNumber ?? 1).Append(" — ").AppendLine(session.Title).AppendLine();
+        output.Append("Status: ").AppendLine(session.IsEnded ? "Ended" : "In progress");
+        output.Append("Last activity: ").AppendLine(session.UpdatedAt.ToLocalTime().ToString("g")).AppendLine();
+        if (!string.IsNullOrWhiteSpace(session.SessionSummary)) output.AppendLine("## Session summary").AppendLine().AppendLine(session.SessionSummary).AppendLine();
+        if (!string.IsNullOrWhiteSpace(session.OpeningSummary)) output.AppendLine("## Previous session recap").AppendLine().AppendLine(session.OpeningSummary).AppendLine();
+        output.AppendLine("## Chronicle").AppendLine();
+        foreach (var line in lines)
+        {
+            output.Append("### ").Append(line.EntryType == "campaign_record" ? "Campaign Record" : line.Role == "user" ? "Player" : "GM").Append(" · ").AppendLine(line.DisplayTimestamp.ToLocalTime().ToString("g")).AppendLine();
+            if (line.RollSides is { } sides) output.Append("<!-- DBLC roll d").Append(sides).AppendLine(" -->");
+            output.AppendLine(line.Content).AppendLine();
+        }
+        var safeTitle = new string(session.Title.Where(character => !Path.GetInvalidFileNameChars().Contains(character)).ToArray()).Trim();
+        var fileName = $"Session {session.SessionNumber ?? 1} - {(string.IsNullOrWhiteSpace(safeTitle) ? "Chronicle" : safeTitle)}.md";
+        MobileMenuSession = null;
+        await JS.InvokeVoidAsync("downloadTextFile", fileName, output.ToString(), "text/markdown;charset=utf-8");
+    }
+    private void ConfirmMobileDelete()
+    {
+        if (MobileMenuSession is not { } session) return;
+        MobileDeletingSession = session;
+        MobileMenuSession = null;
+    }
+    private void CancelMobileDelete() => MobileDeletingSession = null;
+    private void DeleteMobileSession()
+    {
+        if (MobileDeletingSession is not { } session || State.Busy) return;
+        State.Delete(session);
+        MobileDeletingSession = null;
+        CloseNavigation();
+    }
+    private void CancelMobilePlayerUpdate()
+    {
+        if (MobilePlayerApplying) return;
+        State.ResolvePlayerSheetUpdate("Player rejected the proposed Player Sheet update. The existing Player Sheet is unchanged.");
+        MobilePlayerApprovalError = "";
+    }
+    private async Task ApproveMobilePlayerUpdate(PendingPlayerSheetUpdate pending)
+    {
+        if (!ReferenceEquals(State.PendingPlayerUpdate, pending)) return;
+        MobilePlayerApplying = true;
+        await InvokeAsync(StateHasChanged);
+        await Task.Yield();
+        try
+        {
+            if (!State.Campaigns.Any(campaign => campaign.Id == pending.CampaignId)) throw new InvalidOperationException("The campaign that requested this update is no longer available.");
+            State.ApplyPlayerSheetUpdate(pending, () => Paper.ApplyApprovedPlayerUpdate(pending.CampaignId, pending.OriginalMarkdown, pending.UpdatedMarkdown));
+            MobilePlayerApprovalError = "";
+        }
+        catch (Exception ex) { MobilePlayerApprovalError = "The existing sheet was kept. DBLC could not save the update: " + ex.Message; }
+        finally { MobilePlayerApplying = false; await InvokeAsync(StateHasChanged); }
+    }
+    private void CancelMobileGmNote() { MobileGmNoteApprovalError = ""; State.CancelGmNoteProposal(); }
+    private void ApproveMobileGmNote(PendingGmNoteProposal pending)
+    {
+        try { State.ApproveGmNoteProposal(pending); MobileGmNoteApprovalError = ""; }
+        catch (Exception ex) { MobileGmNoteApprovalError = "No GM Note was saved: " + ex.Message; }
+    }
+    private void CancelMobileBestiary() { MobileBestiaryApprovalError = ""; State.CancelBestiaryProposal(); }
+    private void ApproveMobileBestiary(PendingBestiaryChange pending)
+    {
+        try { State.ApproveBestiaryProposal(pending); MobileBestiaryApprovalError = ""; }
+        catch (Exception ex) { MobileBestiaryApprovalError = "No Bestiary change was saved: " + ex.Message; }
+    }
+    private bool _submitStarting;
+    private long _lastSubmitTick;
+    private int SelectedDieSides = 20;
+    private async Task<bool> RecordPlayerRoll(DiceRollRequest roll)
+    {
+        var recorded = await Ui.InvokeAsync(() => State.RecordDiceRoll(roll.Sides, roll.Result, roll.Id, roll.ConversationId));
+        if (recorded) await JumpToLatest();
+        return recorded;
+    }
+    private async Task Submit()
+    {
+        // Coalesce duplicate taps, including events already in flight when Busy changes.
+        var now = Environment.TickCount64;
+        if (_submitStarting || now - _lastSubmitTick < 400) return;
+        _lastSubmitTick = now;
+        _submitStarting = true;
+        try { await SubmitCore(Draft.Trim(), fromComposer: true); }
+        finally { _submitStarting = false; }
+    }
+    private async Task SubmitCore(string text, bool fromComposer, string? internalInstruction = null)
+    {
+        MobileSubmitError = "";
+        if (State.Busy)
+        {
+            if (!fromComposer) return;
+            if (text.Length == 0) { await Ui.InvokeAsync(State.StopCurrentResponse); return; }
+            if (await Ui.InvokeAsync(() => State.SteerCurrentResponse(text))) Draft = "";
+            else MobileSubmitError = "The active GM turn belongs to another Session or is finishing. Your draft was kept.";
+            return;
+        }
+        Task? task = null;
+        var sourceConversation = State.Current;
+        if (sourceConversation is null) { MobileSubmitError = "No Session is selected. Your draft was kept."; return; }
+        async Task<string> RequestWorkbenchEndFromGm(WorkbenchExitRetention retention)
+        {
+            if (sourceConversation is not { IsWorkbench: true } workbench || State.Current?.Id != workbench.Id)
+                return "The player is no longer in this Workbench. It was not ended.";
+            if (!State.TryBeginWorkbenchExitReview(workbench.Id, out var reservation))
+                return "A Workbench exit review is already being prepared or reviewed. Do not request another one.";
+            try
+            {
+                Paper.SaveAll();
+                if (!State.PublishWorkbenchExitReview(reservation, retention, out var approval) || approval is null)
+                    return "DBLC could not open the shared Workbench exit review. The Workbench remains open.";
+                return await approval;
+            }
+            catch (Exception ex)
+            {
+                State.CancelWorkbenchExitReviewPreparation(reservation);
+                return "DBLC could not open the Workbench exit review, so the Workbench remains open. " + ex.Message;
+            }
+        }
+        var accepted = false;
+        string? resolvedModelId = null;
+        try { resolvedModelId = await ModelInfo.GetModelIdAsync(State.Endpoint); } catch { }
+        await Ui.InvokeAsync(() =>
+        {
+            task = State.SendAsync(text, Client, resolvedModelId, readPlayer: Paper.ReadPlayerMarkdown, readWorkspace: Paper.ReadWorkspaceNotes,
+                requestWorkbenchEnd: RequestWorkbenchEndFromGm, expectedConversationId: sourceConversation.Id, internalInstruction: internalInstruction,
+                onAccepted: () => accepted = true, onRejected: reason => MobileSubmitError = reason);
+        });
+        if (!accepted) { await InvokeAsync(StateHasChanged); return; }
+        _submitStarting = false;
+        if (fromComposer) Draft = "";
+        await InvokeAsync(StateHasChanged);
+        await task!;
+    }
+
+    private async Task ApplyChronicleResponseStateAsync()
+    {
+        var pending = Interlocked.Exchange(ref _responseActivePending, -1);
+        if (pending < 0) return;
+        try
+        {
+            await JS.InvokeVoidAsync(pending == 1 ? "beginChronicleResponse" : "endChronicleResponse", MessagesElement);
+        }
+        catch { Interlocked.CompareExchange(ref _responseActivePending, pending, -1); }
+    }
+
+    private async Task SelectCampaign(Guid id)
+    {
+        await Ui.InvokeAsync(() => State.SelectCampaign(id));
+        if (State.ActiveCampaignId != id) { MobileNavigationError = "The Player Sheet or Workspace has unsaved changes. Restore file access and retry."; return; }
+        MobileNavigationError = "";
+        CloseNavigation();
+    }
+    private async Task SelectSession(Guid id)
+    {
+        var conversation = State.Conversations.FirstOrDefault(item => item.Id == id);
+        if (conversation is not null) await Ui.InvokeAsync(() => State.Select(conversation));
+        CloseNavigation();
+    }
+    private async Task CreateSession() { await Ui.InvokeAsync(State.NewConversation); CloseNavigation(); }
+    private async Task CreateWorkbench()
+    {
+        if (State.Current is not { IsWorkbench: false } parent || string.IsNullOrWhiteSpace(WorkbenchName)) return;
+        await Ui.InvokeAsync(() => State.CreateWorkbench(parent.Id, WorkbenchName));
+        WorkbenchName = ""; CloseNavigation();
+    }
+
+    private async Task RequestMobileWorkbenchExit()
+    {
+        if (_submitStarting || State.Busy || State.WorkbenchExitReviewBusy || State.Current?.IsWorkbench != true) return;
+        _submitStarting = true;
+        try
+        {
+            MobileWorkbenchExitError = "";
+            await SubmitCore("", fromComposer: false, internalInstruction: "[DBLC: The player requested Review & End. Review the Workbench and use request_end_workbench.]");
+        }
+        finally { _submitStarting = false; }
+    }
+    private void DiscardMobileWorkbenchNow()
+    {
+        if (State.Busy || State.WorkbenchExitReviewBusy || State.Current is not { IsWorkbench: true } workbench) return;
+        try
+        {
+            var parent = State.EndWorkbench(workbench.Id, [], []);
+            if (parent is null) MobileWorkbenchExitError = "The parent Session is unavailable; the Workbench was kept.";
+            else MobileWorkbenchExitError = "Workbench discarded. No GM Notes or Chronicle facts were saved.";
+            CloseNavigation();
+        }
+        catch (Exception ex) { MobileWorkbenchExitError = "DBLC could not discard the Workbench. It remains open. " + ex.Message; }
+    }
+    private void DiscardMobileWorkbenchFromReview(PendingWorkbenchExitReview expected) => State.ResolveWorkbenchExitReview(WorkbenchExitReviewAction.Discard, expected);
+    private void CancelMobileWorkbenchExit(PendingWorkbenchExitReview expected) => State.ResolveWorkbenchExitReview(WorkbenchExitReviewAction.Cancel, expected);
+    private void ApproveMobileWorkbenchExit(PendingWorkbenchExitReview expected) => State.ResolveWorkbenchExitReview(WorkbenchExitReviewAction.Approve, expected);
+    private void CloseDesk() => DeskOpen = false;
+    private async Task OpenGmNoteReference(GmNoteReference reference)
+    {
+        if (!State.CanOpenGmNoteReference(reference)) return;
+        try { await JS.InvokeVoidAsync("suspendChronicleNavigation", MessagesElement); } catch { }
+        _composerInstalled = false;
+        FocusedGmNoteId = reference.NoteId;
+        ActiveSpace = "Settings";
+        DeskOpen = false;
+    }
+    private Task OpenSourceReference(GmSourceReference reference)
+    {
+        // The remote browser is player-facing. Reuse the existing note navigation;
+        // Library and archive citations deliberately have no new remote endpoint.
+        return reference.Kind == "gm_note" && reference.CampaignId is { } campaignId && reference.NoteId is { } noteId
+            ? OpenGmNoteReference(new GmNoteReference(campaignId, noteId, reference.Title)) : Task.CompletedTask;
+    }
+    private async Task OpenDeskSection(string section)
+    {
+        FocusedGmNoteId = null;
+        if (ActiveSpace == "Table")
+        {
+            try { await JS.InvokeVoidAsync("suspendChronicleNavigation", MessagesElement); } catch { }
+            _composerInstalled = false;
+        }
+        ActiveSpace = section;
+        DeskOpen = false;
+    }
+    private Task ReturnToTable()
+    {
+        FocusedGmNoteId = null;
+        ActiveSpace = "Table";
+        _navigationPending = true;
+        _composerInstalled = false;
+        Interlocked.Exchange(ref _responseActivePending, State.Busy ? 1 : 0);
+        CloseNavigation();
+        return Task.CompletedTask;
+    }
+    private void OpenImage(string dataUrl) { ViewerDataUrl = dataUrl; ShowImageViewer = true; }
+    private void CloseImage() { ViewerDataUrl = null; ShowImageViewer = false; }
+    private string? GetImage(ChatLine line, string key)
+    {
+        if (State.Current is not { } current) return null;
+        if (_imageSession != current.Id) { _imageSession = current.Id; _imageCache.Clear(); }
+        if (_imageCache.TryGetValue(key, out var cached)) return cached;
+        var data = ChronicleImages.ReadDataUrl(current.CampaignId, current.Id, key);
+        if (data is not null) _imageCache[key] = data;
+        return data;
+    }
+    private string CurrentPlayerName => State.GetPlayerChronicleIdentity(State.Current?.CampaignId ?? State.ActiveCampaignId).DisplayName;
+    private PlayerImageAsset? CurrentPlayerPortrait
+    {
+        get
+        {
+            var campaignId = State.Current?.CampaignId ?? State.ActiveCampaignId;
+            var identity = State.GetPlayerChronicleIdentity(campaignId);
+            return string.IsNullOrWhiteSpace(identity.PortraitMarkdownPath) ? null : PlayerImages.FindForBrowser(campaignId, identity.PortraitMarkdownPath);
+        }
+    }
+    private NpcCard? ResolveSpeakerNpc(GmPresentationSegment segment)
+        => segment.SpeakerNpcId is { } id ? State.GetNpcs(State.Current?.CampaignId ?? State.ActiveCampaignId).FirstOrDefault(npc => npc.Id == id) : null;
+    private string NpcSpeakerPortraitStyle(NpcCard npc)
+    {
+        var frame = PortraitStore.ReadFrame(State.Current?.CampaignId ?? State.ActiveCampaignId, npc.Id, npc.PortraitExtension);
+        return FormattableString.Invariant($"object-fit:contain;object-position:50% 50%;transform:translate({frame.X}%,{frame.Y}%) scale({frame.Zoom})");
+    }
+    private static string PlayerIdentityImageStyle(PlayerImageFrame frame) => FormattableString.Invariant($"object-position:50% 50%;transform:translate({frame.X}%,{frame.Y}%) scale({frame.Zoom})");
+    private static string IdentityInitial(string? name) => string.IsNullOrWhiteSpace(name) ? "?" : name.Trim()[0].ToString().ToUpperInvariant();
+    private static string MobileFlavorClass(string? flavor) => flavor switch { "SCRATCHY" => "flavor-scratchy", "HANDWRITTEN" => "flavor-handwritten", "GOTHIC" => "flavor-gothic", "ANCIENT" => "flavor-ancient", "HEAVY" => "flavor-heavy", "UNEASY" => "flavor-uneasy", "GLITCH" or "GLITCH_MEDIUM" => "flavor-glitch flavor-glitch-medium", "GLITCH_LOW" => "flavor-glitch flavor-glitch-low", "GLITCH_CURSED" => "flavor-glitch flavor-glitch-cursed", _ => "" };
+    public void Dispose() { _disposed = true; State.Changed -= OnStateChanged; _navigationReference?.Dispose(); _sessionMenuReference?.Dispose(); }
+}

@@ -1,0 +1,13 @@
+GM Expression fonts
+==================
+
+These fonts are bundled for the optional GM Flavor Fonts presentation feature.
+
+- Special Elite — Apache License 2.0; https://github.com/google/fonts/tree/main/apache/specialelite
+- Caveat — SIL Open Font License 1.1; https://github.com/google/fonts/tree/main/ofl/caveat
+- UnifrakturMaguntia — SIL Open Font License 1.1; https://github.com/google/fonts/tree/main/ofl/unifrakturmaguntia
+- IM Fell English — SIL Open Font License 1.1; https://github.com/google/fonts/tree/main/ofl/imfellenglish
+- Bangers — SIL Open Font License 1.1; https://github.com/google/fonts/tree/main/ofl/bangers
+- Creepster — SIL Open Font License 1.1; https://github.com/google/fonts/tree/main/ofl/creepster
+
+The corresponding license texts are included alongside each bundled font in this folder.

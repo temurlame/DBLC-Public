@@ -1,0 +1,130 @@
+.dblc-sigil {
+  display: inline-block;
+  position: relative;
+  flex: none;
+  width: var(--sigil-size, 45px);
+  height: var(--sigil-size, 45px);
+  vertical-align: middle;
+}
+
+.dblc-sigil-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 45px;
+  height: 45px;
+  transform: scale(var(--sigil-scale, 1));
+  transform-origin: top left;
+}
+
+.typing > .dblc-sigil { margin-top: -8px; }
+
+.dblc-sigil .gm-thinking-sigil-float {
+  display: inline-block;
+  position: relative;
+  flex: 0 0 45px;
+  width: 45px;
+  height: 45px;
+
+  isolation: isolate;
+  animation: gm-thinking-sigil-float var(--float-duration) ease-in-out infinite;
+}
+
+.dblc-sigil .gm-thinking-sigil-vertical {
+  position: absolute;
+  inset: 0;
+  width: 45px;
+  height: 45px;
+  transform-style: preserve-3d;
+  animation: gm-thinking-sigil-vertical-flip var(--flip-duration) ease-in-out var(--flip-delay) infinite;
+}
+
+.dblc-sigil .gm-thinking-sigil {
+  position: absolute;
+  inset: 0;
+  width: 45px;
+  height: 45px;
+  background: transparent;
+  perspective: 80px;
+}
+
+.dblc-sigil .gm-thinking-sigil .gm-thinking-sigil-half {
+  position: absolute;
+  top: .81px;
+  display: block;
+  width: max-content;
+  height: auto;
+  border-radius: 0;
+  background: transparent;
+  white-space: pre;
+  font: 700 2.7px/3.096px "Courier New", monospace;
+  letter-spacing: 0;
+  text-align: left;
+  transform-origin: center center;
+  backface-visibility: visible;
+  animation:
+    gm-thinking-sigil-flicker 4.8s linear infinite,
+    gm-thinking-half-flip var(--flip-duration) ease-in-out var(--flip-delay) infinite,
+    gm-thinking-sigil-contour var(--contour-duration) ease-in-out var(--contour-delay) infinite;
+}
+
+.dblc-sigil .gm-thinking-sigil .gm-thinking-sigil-gray {
+  left: 2.5ch;
+  color: #737373;
+}
+
+.dblc-sigil .gm-thinking-sigil .gm-thinking-sigil-red {
+  left: 14.5ch;
+  color: #e34b54;
+}
+
+@keyframes gm-thinking-sigil-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+@keyframes gm-thinking-sigil-flicker {
+  0%, 100% { opacity: .76; }
+  36% { opacity: 1; }
+  37% { opacity: .55; }
+  39% { opacity: .95; }
+  65% { opacity: .84; }
+  66% { opacity: .62; }
+  68% { opacity: .9; }
+}
+
+@keyframes gm-thinking-sigil-contour {
+  0%, 56%, 100% { filter: drop-shadow(0 0 0 currentColor); }
+  62%, 65% { filter: drop-shadow(0 0 2px currentColor) drop-shadow(0 0 4px currentColor); }
+  72% { filter: drop-shadow(0 0 0 currentColor); }
+}
+
+@keyframes gm-thinking-half-flip {
+  0%, 75% { transform: perspective(80px) rotateY(0deg); }
+  95%, 100% { transform: perspective(80px) rotateY(360deg); }
+}
+
+@keyframes gm-thinking-sigil-vertical-flip {
+  0%, 88% { transform: rotateX(0deg); }
+  98%, 100% { transform: rotateX(360deg); }
+}
+
+.dblc-sigil-static .gm-thinking-sigil-float,
+.dblc-sigil-static .gm-thinking-sigil-vertical,
+.dblc-sigil-static .gm-thinking-sigil .gm-thinking-sigil-half {
+  animation: none;
+  opacity: 1;
+  transform: none;
+  filter: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dblc-sigil .gm-thinking-sigil-float,
+  .dblc-sigil .gm-thinking-sigil-vertical,
+  .dblc-sigil .gm-thinking-sigil .gm-thinking-sigil-half {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+}

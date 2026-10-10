@@ -1,0 +1,51 @@
+@using Microsoft.AspNetCore.Components.Web
+
+@if (IsOpen && !string.IsNullOrWhiteSpace(DataUrl))
+{
+    <div class="portrait-viewer-backdrop" @onclick="Close" @onwheel="Zoom" @onwheel:preventDefault>
+        <section class="portrait-viewer" @onclick:stopPropagation>
+            <header class="portrait-viewer-header"><span>@Title</span><div class="portrait-viewer-tools"><button title="Zoom out" @onclick="() => AdjustZoom(.8)">−</button><span>@ZoomLabel</span><button title="Zoom in" @onclick="() => AdjustZoom(1.25)">＋</button><button title="Fit to window" @onclick="ResetZoom">Fit</button><button class="portrait-viewer-close" title="Close image" @onclick="Close">×</button></div></header>
+            <div class="portrait-viewer-stage" @onpointerdown="StartPan" @onpointerdown:preventDefault @onpointermove="Pan" @onpointerup="EndPan" @onpointercancel="EndPan" style="cursor:@(Scale > 1 ? "grab" : "default")">
+                <img class="portrait-viewer-image" src="@DataUrl" alt="@Title" draggable="false" style="transform:translate(@(PanX)px,@(PanY)px) scale(@Scale)" />
+            </div>
+        </section>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public string? DataUrl { get; set; }
+    [Parameter] public string Title { get; set; } = "Image";
+    [Parameter] public EventCallback OnClose { get; set; }
+    private bool _wasOpen;
+    private bool Panning;
+    private double Scale = 1;
+    private double PanX;
+    private double PanY;
+    private double PointerX;
+    private double PointerY;
+    private double OriginX;
+    private double OriginY;
+    private string ZoomLabel => $"{Scale * 100:0}%";
+
+    protected override void OnParametersSet()
+    {
+        if (IsOpen && !_wasOpen) ResetZoom();
+        _wasOpen = IsOpen;
+    }
+    private Task Close() => OnClose.InvokeAsync();
+    private void AdjustZoom(double factor) => Scale = Math.Clamp(Scale * factor, .25, 32);
+    private void ResetZoom() { Scale = 1; PanX = PanY = 0; }
+    private void Zoom(WheelEventArgs e) => AdjustZoom(e.DeltaY < 0 ? 1.12 : .89);
+    private void StartPan(PointerEventArgs e)
+    {
+        if (Scale <= 1) return;
+        Panning = true; PointerX = e.ClientX; PointerY = e.ClientY; OriginX = PanX; OriginY = PanY;
+    }
+    private void Pan(PointerEventArgs e)
+    {
+        if (!Panning) return;
+        PanX = OriginX + e.ClientX - PointerX; PanY = OriginY + e.ClientY - PointerY;
+    }
+    private void EndPan(PointerEventArgs e) => Panning = false;
+}

@@ -1,0 +1,55 @@
+<div class="dblc-sigil @(Animated ? "" : "dblc-sigil-static")" role="img" aria-label="@Label" style="--sigil-size: @(Size)px; --sigil-scale: @Scale">
+<div class="dblc-sigil-canvas">
+<div class="gm-thinking-sigil-float" style="--float-duration: @FloatDuration">
+    <div class="gm-thinking-sigil-vertical" aria-hidden="true" style="--flip-duration: @VerticalFlip.Duration; --flip-delay: @VerticalFlip.Delay">
+        <div class="gm-thinking-sigil" style="--contour-duration: @ContourTiming.Duration; --contour-delay: @ContourTiming.Delay">
+            <span class="gm-thinking-sigil-half gm-thinking-sigil-gray" aria-hidden="true" style="--flip-duration: @GrayFlip.Duration; --flip-delay: @GrayFlip.Delay">@GrayHalf</span>
+            <span class="gm-thinking-sigil-half gm-thinking-sigil-red" aria-hidden="true" style="--flip-duration: @RedFlip.Duration; --flip-delay: @RedFlip.Delay">@RedHalf</span>
+        </div>
+    </div>
+</div>
+</div>
+</div>
+
+@code {
+    [Parameter] public int Size { get; set; } = 45;
+    [Parameter] public bool Animated { get; set; } = true;
+    [Parameter] public string Label { get; set; } = "The GM is thinking";
+    private string Scale => (Size / 45d).ToString("0.######", System.Globalization.CultureInfo.InvariantCulture);
+
+    // Indents are monospace character cells within each independently rotating half.
+    private static readonly (int GrayIndent, string Gray, int RedIndent, string Red)[] SigilRows =
+    [
+        (10, ".", 2, "."),
+        (10, "i,", 1, ".i."),
+        (9, ":S.", 1, ".S:"),
+        (6, ". .iS.", 2, "Hi. ."),
+        (5, ".:iiHI.", 2, "IIii:."),
+        (4, ",i:  ,H", 1, ".H,  :i,"),
+        (0, "..,+Hi..  .H:.", 3, "i. .iHi:.."),
+        (3, ":I;   .H,", 2, "I.   +I;"),
+        (3, ".,+;. .I.", 2, "H. .;+,"),
+        (6, ".:;;I", 2, "I:;:."),
+        (9, ",i", 2, "I,"),
+        (10, "+", 2, ";"),
+        (10, ",", 2, ",")
+    ];
+
+    private static readonly string GrayHalf = string.Join("\n", SigilRows.Select(row => new string(' ', row.GrayIndent) + row.Gray));
+    private static readonly string RedHalf = string.Join("\n", SigilRows.Select(row => new string(' ', row.RedIndent) + row.Red));
+
+    private readonly FlipTiming GrayFlip = CreateFlipTiming(4_500, 10_501);
+    private readonly FlipTiming RedFlip = CreateFlipTiming(5_200, 11_201);
+    private readonly FlipTiming VerticalFlip = CreateFlipTiming(15_000, 28_001);
+    private readonly FlipTiming ContourTiming = CreateFlipTiming(4_200, 7_201);
+    private readonly string FloatDuration = $"{Random.Shared.Next(3_800, 5_801)}ms";
+
+    private static FlipTiming CreateFlipTiming(int minimumDuration, int maximumDuration)
+    {
+        var duration = Random.Shared.Next(minimumDuration, maximumDuration);
+        var delay = -Random.Shared.Next(0, duration);
+        return new FlipTiming($"{duration}ms", $"{delay}ms");
+    }
+
+    private sealed record FlipTiming(string Duration, string Delay);
+}

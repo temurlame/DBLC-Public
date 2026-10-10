@@ -1,0 +1,184 @@
+@inject AppState State
+@inject WorkspaceNotesStore WorkspaceStore
+@inject PlayerSheetStore PlayerStore
+@inject NpcPortraitStore PortraitStore
+@inject PaperDocumentState Paper
+@implements IDisposable
+
+<main class="campaign-manager">
+    <header class="campaign-manager-heading">
+        <div><div class="eyebrow">DBLC · CAMPAIGNS</div><h1>Choose your table</h1><p>Switch to a campaign or start a new one.</p></div>
+        <div class="campaign-mark"><GmThinkingSigil Size="86" Label="DBLC" /></div>
+    </header>
+    <section class="campaign-list" aria-label="Campaigns">
+        @foreach (var campaign in State.Campaigns.OrderByDescending(item => item.LastPlayedAt))
+        {
+            var sessions = State.Conversations.Where(item => item.CampaignId == campaign.Id).ToList();
+            var latest = sessions.OrderByDescending(item => item.SessionNumber ?? -1).FirstOrDefault();
+            <div class="campaign-row" @oncontextmenu="e => OpenMenu(campaign, e)" @oncontextmenu:preventDefault>
+                <button class="campaign-card @(campaign.Id == State.ActiveCampaignId ? "current" : "")" @onclick="() => SelectCampaign(campaign.Id)">
+                    <span class="campaign-card-main"><span class="campaign-card-title">@campaign.Name</span><span class="campaign-card-meta">@(latest is null ? "No sessions yet" : $"{latest.Title} · Session {latest.SessionNumber ?? 0} · {sessions.Count} {(sessions.Count == 1 ? "session" : "sessions")}")</span></span>
+                    <span class="campaign-card-last">@(latest is null ? "NOT PLAYED" : $"LAST PLAYED · {campaign.LastPlayedAt.ToLocalTime():MMM d, yyyy}")</span>
+                    <span class="campaign-card-arrow">›</span>
+                </button>
+                <button class="session-menu-trigger campaign-menu-trigger" title="Campaign options" @onclick="e => OpenMenu(campaign, e)" @onclick:stopPropagation>···</button>
+            </div>
+        }
+    </section>
+    @if (Creating)
+    {
+        <form class="campaign-create-form" @onsubmit="CreateCampaign" @onsubmit:preventDefault>
+            <label>CAMPAIGN NAME<input @bind="NameDraft" @bind:event="oninput" placeholder="e.g. The Dying Lands" /></label>
+            <div class="campaign-create-actions"><button type="button" class="campaign-cancel" @onclick="() => Creating = false">Cancel</button><button class="campaign-create-submit" type="submit" disabled="@string.IsNullOrWhiteSpace(NameDraft)">Create campaign</button></div>
+        </form>
+    }
+    else
+    {
+        <button class="campaign-new-button" @onclick="BeginCreate"><span>＋</span> New Campaign</button>
+    }
+    @if (!string.IsNullOrWhiteSpace(Status)) { <div class="campaign-action-status">@Status</div> }
+    <footer class="campaign-manager-foot">Campaigns and sessions are stored on this device.</footer>
+</main>
+
+@if (MenuCampaign is not null)
+{
+    <div class="session-menu-backdrop" @onclick="CloseMenu" @oncontextmenu:preventDefault>
+        <div class="session-context-menu" style="left:min(@(MenuX)px,calc(100vw - 190px));top:min(@(MenuY)px,calc(100vh - 210px))" @onclick:stopPropagation>
+            <button @onclick="BeginRename">Rename</button>
+            <button @onclick="Duplicate">Duplicate</button>
+            <button @onclick="Import">Import</button>
+            <div></div>
+            <button class="danger-action" @onclick="BeginDelete">Delete</button>
+        </div>
+    </div>
+}
+@if (RenamingCampaign is { } renaming)
+{
+    <div class="modal-backdrop" @onclick="CloseRename">
+        <section class="session-dialog" @onclick:stopPropagation>
+            <div class="modal-top"><div><div class="eyebrow">CAMPAIGN</div><h2>Rename campaign</h2></div><button class="icon-button" @onclick="CloseRename">×</button></div>
+            <label class="session-dialog-label">Campaign name<input @bind="NameDraft" @bind:event="oninput" @onkeydown="HandleRenameKey" /></label>
+            <div class="session-dialog-actions"><button class="outline-button" @onclick="CloseRename">Cancel</button><button class="primary-button small" @onclick="SaveRename">Save name</button></div>
+        </section>
+    </div>
+}
+@if (DeletingCampaign is { } deleting)
+{
+    <div class="modal-backdrop" @onclick="CloseDelete">
+        <section class="session-dialog" @onclick:stopPropagation>
+            <div class="modal-top"><div><div class="eyebrow">CAMPAIGN</div><h2>Delete this campaign?</h2></div><button class="icon-button" @onclick="CloseDelete">×</button></div>
+            <p class="session-delete-copy">“@deleting.Name” and all its sessions, archived chronicle, Player sheet, Workspace notes, and NPC portraits will be permanently removed from this device.</p>
+            <div class="session-dialog-actions"><button class="outline-button" @onclick="CloseDelete">Cancel</button><button class="primary-button small danger-button" @onclick="Delete">Delete campaign</button></div>
+        </section>
+    </div>
+}
+
+@code {
+    private bool Creating;
+    private string NameDraft = "";
+    private string Status = "";
+    private Campaign? MenuCampaign;
+    private Campaign? RenamingCampaign;
+    private Campaign? DeletingCampaign;
+    private double MenuX;
+    private double MenuY;
+
+    protected override void OnInitialized() => State.Changed += StateChanged;
+    private void StateChanged() => _ = InvokeAsync(StateHasChanged);
+    private void SelectCampaign(Guid campaignId) { State.SelectCampaign(campaignId); Status = State.ActiveCampaignId == campaignId ? "" : "Save the current Player Sheet and Workspace before switching campaigns."; }
+    private void BeginCreate() { Creating = true; NameDraft = ""; }
+    private void CreateCampaign()
+    {
+        if (string.IsNullOrWhiteSpace(NameDraft)) return;
+        try { State.CreateCampaign(NameDraft); Creating = false; NameDraft = ""; Status = ""; }
+        catch (Exception error) { Status = "Could not create campaign: " + error.Message; }
+    }
+    private void OpenMenu(Campaign campaign, Microsoft.AspNetCore.Components.Web.MouseEventArgs e)
+    {
+        MenuCampaign = campaign;
+        MenuX = e.ClientX;
+        MenuY = e.ClientY;
+    }
+    private void CloseMenu() => MenuCampaign = null;
+    private void BeginRename()
+    {
+        RenamingCampaign = MenuCampaign;
+        NameDraft = MenuCampaign?.Name ?? "";
+        MenuCampaign = null;
+    }
+    private void CloseRename() => RenamingCampaign = null;
+    private void HandleRenameKey(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") SaveRename();
+        else if (e.Key == "Escape") CloseRename();
+    }
+    private void SaveRename()
+    {
+        if (RenamingCampaign is not { } campaign || string.IsNullOrWhiteSpace(NameDraft)) return;
+        State.RenameCampaign(campaign.Id, NameDraft);
+        RenamingCampaign = null;
+    }
+    private void Duplicate()
+    {
+        if (MenuCampaign is not { } campaign) return;
+        MenuCampaign = null;
+        try
+        {
+            if (!Paper.SaveAll()) throw new IOException("Save the current Player Sheet and Workspace before duplicating.");
+            var duplicateId = Guid.NewGuid();
+            var isLegacyCampaign = !State.LegacyPaperFallbackDisabled && State.Campaigns.FirstOrDefault()?.Id == campaign.Id;
+            try
+            {
+                WorkspaceStore.DuplicateCampaign(campaign.Id, duplicateId, isLegacyCampaign);
+                PlayerStore.DuplicateCampaign(campaign.Id, duplicateId, isLegacyCampaign);
+                PortraitStore.DuplicateCampaign(campaign.Id, duplicateId);
+                State.DuplicateCampaign(campaign.Id, duplicateId);
+            }
+            catch
+            {
+                WorkspaceStore.DeleteCampaign(duplicateId);
+                PlayerStore.DeleteCampaign(duplicateId);
+                PortraitStore.DeleteCampaign(duplicateId);
+                throw;
+            }
+            Status = "Campaign duplicated, including its sessions, papers, and NPC portraits.";
+        }
+        catch (Exception ex) { Status = "Could not duplicate campaign: " + ex.Message; }
+    }
+    private void Import()
+    {
+        if (MenuCampaign is not { } campaign) return;
+        MenuCampaign = null;
+        using var dialog = new System.Windows.Forms.OpenFileDialog
+        {
+            Title = $"Import a session into {campaign.Name}",
+            Filter = "DBLC session chronicle (*.md)|*.md",
+            DefaultExt = "md",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        try
+        {
+            var markdown = File.ReadAllText(dialog.FileName);
+            if (!State.ImportSessionMarkdown(campaign.Id, markdown, out var error)) { Status = error; return; }
+            Status = $"Session imported into {campaign.Name}.";
+        }
+        catch (Exception ex) { Status = "Could not import session: " + ex.Message; }
+    }
+    private void BeginDelete() { DeletingCampaign = MenuCampaign; MenuCampaign = null; }
+    private void CloseDelete() => DeletingCampaign = null;
+    private void Delete()
+    {
+        if (DeletingCampaign is not { } campaign) return;
+        try
+        {
+            if (!Paper.SaveAll()) throw new IOException("Save the current Player Sheet and Workspace before deleting.");
+            State.DeleteCampaign(campaign.Id);
+            Status = "Campaign deleted.";
+        }
+        catch (Exception ex) { Status = "Could not delete campaign: " + ex.Message; }
+        DeletingCampaign = null;
+    }
+    public void Dispose() => State.Changed -= StateChanged;
+}

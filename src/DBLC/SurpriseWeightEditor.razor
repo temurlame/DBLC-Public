@@ -1,0 +1,15 @@
+<details class="surprise-weight-group">
+    <summary>@AspectName <span>@Keys.Length</span></summary>
+    <div class="surprise-weight-grid">
+        @foreach (var key in Keys)
+        {
+            <label @key="key"><span>@key</span><input type="number" min="0" step="0.1" @bind="Weights[key]" /></label>
+        }
+    </div>
+</details>
+
+@code {
+    [Parameter, EditorRequired] public string AspectName { get; set; } = "";
+    [Parameter, EditorRequired] public Dictionary<string, double> Weights { get; set; } = [];
+    [Parameter, EditorRequired] public string[] Keys { get; set; } = [];
+}

@@ -1,0 +1,30 @@
+<article class="bestiary-card-view">
+    <div class="bestiary-card-portrait">
+        @if (!string.IsNullOrWhiteSpace(PortraitDataUrl))
+        {
+            @if (OnPortraitClick.HasDelegate)
+            {
+                <button class="bestiary-portrait-button" title="View original portrait" @onclick="OnPortraitClick"><span class="bestiary-portrait-frame" style="@PortraitStyle"><img src="@PortraitDataUrl" alt="Portrait of @Entry.Name" /></span></button>
+            }
+            else
+            {
+                <span class="bestiary-portrait-frame" style="@PortraitStyle"><img src="@PortraitDataUrl" alt="Portrait of @Entry.Name" /></span>
+            }
+        }
+        else
+        {
+            <div class="bestiary-portrait-placeholder" aria-label="No portrait uploaded">@(string.IsNullOrWhiteSpace(Entry.Name) ? "?" : Entry.Name.Trim()[0].ToString().ToUpperInvariant())</div>
+        }
+    </div>
+    <header class="bestiary-card-heading"><h3>@Entry.Name</h3><div class="bestiary-slain"><span>SLAIN</span><strong>@Entry.Slain</strong></div></header>
+    <section class="bestiary-card-section"><div class="agenda-section-label">STAT BLOCK · STANDARD BASELINE</div><div class="bestiary-stat-block">@(string.IsNullOrWhiteSpace(Entry.StatBlock) ? "No stat block recorded." : Entry.StatBlock)</div></section>
+    <section class="bestiary-card-section"><div class="agenda-section-label">CAMPAIGN NOTES</div><div class="bestiary-notes">@(string.IsNullOrWhiteSpace(Entry.Notes) ? "No campaign notes yet." : Entry.Notes)</div></section>
+</article>
+
+@code {
+    [Parameter, EditorRequired] public BestiaryEntry Entry { get; set; } = new();
+    [Parameter] public string? PortraitDataUrl { get; set; }
+    [Parameter] public NpcPortraitFrame Frame { get; set; } = new();
+    [Parameter] public EventCallback OnPortraitClick { get; set; }
+    private string PortraitStyle => FormattableString.Invariant($"--frame-x:{Frame.X}%;--frame-y:{Frame.Y}%;--frame-zoom:{Frame.Zoom}");
+}

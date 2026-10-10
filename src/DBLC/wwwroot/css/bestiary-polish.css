@@ -1,0 +1,157 @@
+.bestiary-editor {
+    grid-template-columns: 105px minmax(0, 1fr);
+    align-items: start;
+    column-gap: 14px;
+    row-gap: 12px;
+}
+
+.bestiary-editor > .npc-back,
+.bestiary-editor > label,
+.bestiary-editor > .npc-editor-status,
+.bestiary-editor > .bestiary-editor-actions {
+    grid-column: 1 / -1;
+}
+
+.bestiary-editor > .npc-portrait-card,
+.bestiary-editor > .bestiary-editor-position-frame {
+    grid-column: 1;
+    justify-self: start;
+}
+
+.bestiary-editor > .bestiary-editor-position-frame {
+    width: 105px;
+    height: 132px;
+}
+
+.bestiary-editor > .npc-portrait-card {
+    width: 105px;
+    height: 132px;
+    padding: 0;
+    border: 0;
+    background: none;
+}
+
+.bestiary-editor > .npc-portrait-card .npc-portrait-placeholder {
+    font-size: 30px;
+}
+
+.bestiary-editor > .bestiary-card-view {
+    grid-column: 1;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    width: 105px;
+    height: 132px;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+}
+
+.bestiary-editor > .bestiary-card-view .bestiary-card-portrait {
+    min-height: 0;
+    justify-content: flex-start;
+}
+
+.bestiary-editor > .bestiary-card-view .bestiary-portrait-frame,
+.bestiary-editor > .bestiary-card-view .bestiary-portrait-placeholder {
+    width: 105px;
+    height: 132px;
+    aspect-ratio: auto;
+}
+
+.bestiary-editor > .bestiary-card-view .bestiary-card-heading,
+.bestiary-editor > .bestiary-card-view .bestiary-card-section {
+    display: none;
+}
+
+.bestiary-editor > .npc-portrait-actions {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: center;
+    min-width: 0;
+}
+
+.bestiary-editor > .bestiary-editor-position-frame + .npc-portrait-actions {
+    grid-row: 2;
+}
+
+.bestiary-editor > .bestiary-position-controls {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    align-items: start;
+}
+
+.bestiary-editor > label {
+    gap: 6px;
+}
+
+.bestiary-editor > label input,
+.bestiary-editor > label textarea {
+    box-sizing: border-box;
+}
+
+.bestiary-editor .bestiary-stat-editor {
+    min-height: 160px !important;
+}
+
+.bestiary-editor-actions {
+    justify-content: flex-start;
+}
+
+.bestiary-editor-actions .outline-button {
+    flex: 0 0 auto;
+    min-width: 82px;
+}
+
+.bestiary-detail .bestiary-card-view {
+    gap: 14px;
+    padding: 11px;
+}
+
+.bestiary-detail .bestiary-card-portrait {
+    min-height: 0;
+    justify-content: flex-start;
+}
+
+.bestiary-detail .bestiary-portrait-frame,
+.bestiary-detail .bestiary-portrait-placeholder {
+    width: 105px;
+    height: 132px;
+    aspect-ratio: auto;
+}
+
+.bestiary-detail-actions {
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.bestiary-detail-actions .outline-button {
+    flex: 0 0 auto;
+    min-width: 76px;
+    padding: 7px 10px;
+    font-size: 10px;
+}
+
+@media (max-width: 360px) {
+    .bestiary-editor {
+        grid-template-columns: 90px minmax(0, 1fr);
+        column-gap: 10px;
+    }
+
+    .bestiary-editor > .npc-portrait-card,
+    .bestiary-editor > .npc-portrait-card .npc-portrait-placeholder,
+    .bestiary-editor > .bestiary-card-view,
+    .bestiary-editor > .bestiary-card-view .bestiary-portrait-frame,
+    .bestiary-editor > .bestiary-card-view .bestiary-portrait-placeholder {
+        width: 90px;
+    }
+
+    .bestiary-editor > .npc-portrait-card,
+    .bestiary-editor > .npc-portrait-card .npc-portrait-placeholder,
+    .bestiary-editor > .bestiary-card-view,
+    .bestiary-editor > .bestiary-card-view .bestiary-portrait-frame,
+    .bestiary-editor > .bestiary-card-view .bestiary-portrait-placeholder {
+        height: 112px;
+    }
+}

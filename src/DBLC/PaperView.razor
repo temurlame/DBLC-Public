@@ -1,0 +1,114 @@
+@inject PaperDocumentState Paper
+@inject PlayerImageAssetStore PlayerImages
+@inject AppState State
+@inject IJSRuntime JS
+@implements IDisposable
+
+<section class="notepad-pane @(IsPlayer ? "player-pane" : "")">
+    <div class="notepad-heading">
+        <div><div class="eyebrow">@(IsPlayer ? "PLAYER · CHARACTER SHEET" : "WORKSPACE · PRIVATE NOTES")</div><h1>@(IsPlayer ? "Player sheet" : "Session notes")</h1><p>@(BrowserHost ? "Saved on this DBLC PC." : IsPlayer ? "Your character notes, kept locally on this device." : "Keep prep, names, loose threads, or anything you want close at the table.")</p></div>
+        @if (IsPlayer)
+        {
+            <div class="player-heading-actions"><div class="note-save-state"><span></span>@Paper.PlayerSaveStatus</div>@if (Paper.HasPreviousPlayerSheet) { <button class="text-button restore-player-sheet" title="Undo the last approved GM Player Sheet update" @onclick="RestorePreviousPlayerSheet">Undo Last Player Update</button> }<button class="outline-button" @onclick="Paper.TogglePlayerPreview">@(Paper.PlayerPreview ? "Edit Markdown" : "Markdown")</button></div>
+        }
+        else
+        {
+            <div class="note-save-state"><span></span>@Paper.NoteSaveStatus</div>
+        }
+    </div>
+    @if (IsPlayer)
+    {
+        var identity = State.GetPlayerChronicleIdentity(Paper.CampaignId);
+        var selectedPortrait = string.IsNullOrWhiteSpace(identity.PortraitMarkdownPath) ? null : PlayerImages.Find(Paper.CampaignId, identity.PortraitMarkdownPath);
+        <div class="player-chronicle-identity">
+            <div class="player-identity-preview">
+                @if (selectedPortrait is not null) { <img src="@selectedPortrait.DataUrl" alt="" style="@PlayerIdentityImageStyle(selectedPortrait.Frame)" /> }
+                else { <span>@IdentityInitial(identity.DisplayName)</span> }
+            </div>
+            <label>CHRONICLE NAME<input value="@identity.DisplayName" maxlength="60" placeholder="Optional character name" @onchange="SaveIdentityName" /></label>
+            <div class="player-identity-caption">Used for your Chronicle messages. Your Player Sheet remains freeform Markdown.</div>
+            @if (selectedPortrait is not null) { <button class="text-button" @onclick="ClearIdentityPortrait">Clear Chronicle Portrait</button> }
+        </div>
+    }
+    <div class="notepad-sheet @(IsPlayer ? "player-sheet" : "")">
+        <div class="sheet-label"><span>@(IsPlayer ? "CHARACTER" : "NOTES")</span><span>@(BrowserHost ? "SAVED ON DBLC PC" : "LOCAL TO THIS DEVICE")</span></div>
+        @if (IsPlayer ? Paper.PlayerUnavailable : Paper.NotesUnavailable)
+        {
+            <div class="player-restore-status">This document could not be read. Its file has not been changed. Restore file access, then retry.</div>
+            <button class="outline-button" @onclick="Paper.RetryUnavailablePapers">Retry loading document</button>
+        }
+        else if (IsPlayer && Paper.PlayerPreview)
+        {
+            @if (string.IsNullOrWhiteSpace(Paper.PlayerMarkdown)) { <div class="markdown-preview preview-empty">Paste your character sheet in Markdown to see the formatted view.</div> }
+            else { <div class="markdown-preview" @ref="PreviewElement">@((MarkupString)PlayerMarkdownRenderer.Render(Paper.PlayerMarkdown, Paper.CampaignId, PlayerImages))</div> }
+        }
+        else if (IsPlayer)
+        {
+            <PlayerMarkdownEditor Markdown="@Paper.PlayerMarkdown" CampaignId="@Paper.CampaignId" MarkdownChanged="UpdatePlayerMarkdown" ChroniclePortraitSelected="SetIdentityPortrait" BrowserHost="@BrowserHost" />
+        }
+        else
+        {
+            <textarea class="notepad-editor" value="@Paper.Notes" @oninput="UpdateText" @onblur="() => { Paper.SaveAll(); }" placeholder="Start writing…
+
+@(BrowserHost ? "This is your space. Notes save automatically on the DBLC PC." : "This is your space. Notes save automatically on this device.")"></textarea>
+        }
+        @if (!string.IsNullOrWhiteSpace(RestoreStatus)) { <div class="player-restore-status">@RestoreStatus</div> }
+        <div class="sheet-footer"><span>@(IsPlayer ? "MARKDOWN" : "PLAIN TEXT") · AUTOSAVES</span><span>@((IsPlayer ? Paper.PlayerMarkdown : Paper.Notes).Length) CHARACTERS</span></div>
+    </div>
+</section>
+<ImageViewer IsOpen="ShowImageViewer" DataUrl="@ViewerImageDataUrl" Title="@ViewerImageTitle" OnClose="CloseImageViewer" />
+
+@code {
+    [Parameter] public string ViewName { get; set; } = "Workspace";
+    [Parameter] public bool BrowserHost { get; set; }
+    private bool IsPlayer => ViewName == "Player";
+    private ElementReference PreviewElement;
+    private DotNetObjectReference<PaperView>? _previewReference;
+    private string? ViewerImageDataUrl;
+    private string ViewerImageTitle = "Image";
+    private bool ShowImageViewer;
+    private string RestoreStatus = "";
+
+    protected override void OnInitialized() { Paper.Changed += OnPaperChanged; State.Changed += OnStateChanged; }
+    private void OnPaperChanged() => _ = InvokeAsync(StateHasChanged);
+    private void OnStateChanged() => _ = InvokeAsync(StateHasChanged);
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (IsPlayer && Paper.PlayerPreview)
+        {
+            _previewReference ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("bindPlayerMarkdownPreview", PreviewElement, _previewReference);
+        }
+    }
+    private void UpdateText(ChangeEventArgs args)
+    {
+        var value = args.Value?.ToString() ?? "";
+        Paper.SetNotes(value);
+    }
+    private void UpdatePlayerMarkdown(string value) => Paper.SetPlayerMarkdown(value);
+    private void SaveIdentityName(ChangeEventArgs args) => State.SetPlayerChronicleName(Paper.CampaignId, args.Value?.ToString());
+    private void SetIdentityPortrait(string path) => State.SetPlayerChroniclePortrait(Paper.CampaignId, path);
+    private void ClearIdentityPortrait() => State.ClearPlayerChroniclePortrait(Paper.CampaignId);
+    private static string IdentityInitial(string? name) => string.IsNullOrWhiteSpace(name) ? "Y" : name.Trim()[0].ToString().ToUpperInvariant();
+    private static string PlayerIdentityImageStyle(PlayerImageFrame frame) => FormattableString.Invariant($"object-position:50% 50%;transform:translate({frame.X}%,{frame.Y}%) scale({frame.Zoom})");
+    private void RestorePreviousPlayerSheet()
+    {
+        try { Paper.RestorePreviousPlayerSheet(); RestoreStatus = ""; }
+        catch (Exception ex) { RestoreStatus = "Could not restore the previous sheet: " + ex.Message; }
+    }
+    [JSInvokable]
+    public async Task OpenPlayerImage(string markdownPath)
+    {
+        var asset = PlayerImages.Find(Paper.CampaignId, markdownPath);
+        if (asset is null) return;
+        ViewerImageDataUrl = asset.DataUrl; ViewerImageTitle = asset.Alt; ShowImageViewer = true;
+        await InvokeAsync(StateHasChanged);
+    }
+    private void CloseImageViewer() => ShowImageViewer = false;
+    public void Dispose()
+    {
+        Paper.Changed -= OnPaperChanged;
+        State.Changed -= OnStateChanged;
+        _previewReference?.Dispose();
+    }
+}

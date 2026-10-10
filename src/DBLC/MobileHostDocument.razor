@@ -1,0 +1,34 @@
+@using Microsoft.AspNetCore.Components.Web
+@using static Microsoft.AspNetCore.Components.Web.RenderMode
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <base href="/" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/images/favicon.png?v=gm-sigil-1" />
+    <link rel="alternate icon" type="image/svg+xml" href="/images/favicon.svg?v=gm-sigil-1" />
+    <link rel="stylesheet" href="/css/app.css?v=gm-stream-effects-2-chronicle-text-size-1-identities-2-dice-3" />
+    <link rel="stylesheet" href="/css/portraits.css" />
+    <link rel="stylesheet" href="/css/bestiary-polish.css" />
+    <link rel="stylesheet" href="/css/campaign-calendar.css" />
+    <link rel="stylesheet" href="/css/gm-thinking-sigil.css" />
+    <link rel="stylesheet" href="/css/mobile.css?v=mobile-viewport-layout-2-chronicle-text-size-1-identities-2-dice-3" />
+    <HeadOutlet @rendermode="InteractiveServer" />
+    <title>DBLC</title>
+</head>
+<body>
+    <MobileRoutes @rendermode="InteractiveServer" />
+    <script src="/app.js?v=mobile-composer-fix-1-dice-2"></script>
+    <script src="/_framework/blazor.web.js" autostart="false"></script>
+    <script>
+        // Diagnostic comparison for Tailscale Serve's WebSocket path. SignalR's
+        // LongPolling transport value is 4; ordinary visits keep the default.
+        const longPolling = new URLSearchParams(location.search).get('transport') === 'longpolling';
+        Blazor.start(longPolling
+            ? { circuit: { configureSignalR: builder => builder.withUrl('/_blazor', { transport: 4 }) } }
+            : {});
+    </script>
+</body>
+</html>

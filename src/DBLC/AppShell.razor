@@ -1,0 +1,2439 @@
+@using Microsoft.AspNetCore.Components.Forms
+@inject AppState State
+@inject LlamaClient Client
+@inject PaperWindowManager PaperWindows
+@inject CampaignWindowManager CampaignWindows
+@inject MobileWebHostManager MobileWeb
+@inject PrivacyLockStore Privacy
+@inject PaperDocumentState Paper
+@inject PlayerImageAssetStore PlayerImages
+@inject ViewOrderStore ViewStore
+@inject LlamaModelInfoClient ModelInfo
+@inject NpcPortraitStore PortraitStore
+@inject ChronicleImageAssetStore ChronicleImages
+@implements IDisposable
+
+<div class="shell @(MobileHost ? $"mobile-space-host {MobileSpaceHostClass}" : "")">
+    @if (!MobileHost)
+    {
+    <aside class="rail">
+        <div class="brand"><GmThinkingSigil Size="84" Label="DBLC" Animated="false" /><div><div class="brand-name">DBLC</div><div class="eyebrow">GAME MASTER'S DESK</div></div></div>
+        <button class="new-chat" @onclick="CampaignWindows.OpenOrActivate"><span>＋</span> Campaign</button>
+        <div class="session-list-heading"><div class="section-label">SESSIONS <span>@State.ActiveConversations.Count()</span></div><button class="workbench-create-link" title="Create a disposable Workbench for this Session" @onclick="OpenWorkbenchCreate" disabled="@(State.Current is null || CurrentParentSession is null || CurrentParentSession.IsEnded || State.Busy)">＋ Workbench</button></div>
+        <div class="conversation-list">
+            @foreach (var session in State.ActiveConversations)
+            {
+                <div @key="session.Id" class="session-row" draggable="true" data-session-id="@session.Id" @oncontextmenu="e => OpenSessionMenu(session, e)" @oncontextmenu:preventDefault @onmouseenter="e => ShowSessionSummary(session, e)" @onmouseleave="ScheduleHideSessionSummary">
+                    <button class="conversation @(State.Current?.Id == session.Id ? "active" : "")" @onclick="() => SelectConversation(session)" title="@session.Title">
+                        <span class="chat-dot"></span><span class="session-copy"><small>SESSION @(session.SessionNumber ?? 1)@(session.IsEnded ? " · ENDED" : "")</small><span class="chat-title">@session.Title</span></span>
+                    </button>
+                    <button class="session-menu-trigger" title="Session options" @onclick="e => OpenSessionMenu(session, e)" @onclick:stopPropagation>···</button>
+                </div>
+                @foreach (var workbench in State.GetWorkbenches(session.Id))
+                {
+                    <button @key="workbench.Id" class="workbench-row @(State.Current?.Id == workbench.Id ? "active" : "")" @onclick="() => SelectConversation(workbench)" title="Resume @workbench.Title"><span class="workbench-branch">└─</span><span>@workbench.Title</span></button>
+                }
+            }
+        </div>
+        @if (State.Current?.IsWorkbench == true)
+        {
+            <div class="session-actions workbench-session-actions">
+                <button class="session-action end-workbench-button" @onclick="RequestEndWorkbench" disabled="@(SessionActionBusy || State.Busy || State.WorkbenchExitReviewBusy)">@(SessionActionBusy || State.WorkbenchExitReviewPreparing ? "Checking…" : "Review & End")</button>
+                <button class="session-action discard-workbench-button" @onclick="DiscardWorkbenchNow" disabled="@(SessionActionBusy || State.Busy)">Discard & Exit</button>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(WorkbenchExitError)) { <div class="workbench-exit-error">@WorkbenchExitError</div> }
+                @if (!string.IsNullOrWhiteSpace(State.WorkbenchExitNotice)) { <div class="workbench-exit-error">@State.WorkbenchExitNotice</div> }
+        }
+        else
+        {
+            <div class="session-actions">
+                <button class="session-action" @onclick="SummarizeCurrentSession" disabled="@(SessionActionBusy || State.Busy || State.Current is null || State.Current.IsEnded)">@(SessionActionBusy && !EndingSession ? "Summarizing…" : "Summarize Session")</button>
+                <button class="session-action" @onclick="EndCurrentSession" disabled="@(SessionActionBusy || State.Busy || State.Current is null || State.Current.IsEnded)">@(SessionActionBusy && EndingSession ? "Ending…" : "End Session")</button>
+            </div>
+        }
+        @if (!string.IsNullOrWhiteSpace(SessionActionStatus)) { <div class="session-action-status">@SessionActionStatus</div> }
+        <div class="rail-bottom"><span class="online-dot"></span><span>Local sessions</span><span class="rail-version">V1</span></div>
+    </aside>
+    }
+
+    <main class="main-area">
+        @if (MobileHost && MobileSection != "Table")
+        {
+            <header class="mobile-space-topbar">
+                <button class="mobile-space-back" type="button" @onclick="ReturnToMobileChronicle">‹ Chronicle</button>
+                <span>@MobileSectionTitle</span>
+            </header>
+        }
+        @if (!MobileHost)
+        {
+        <header class="topbar">
+            <div class="crumb">@for (var i = 0; i < ViewOrder.Count; i++) { var view = ViewOrder[i]; <button class="view-tab @(ActiveView == view ? "selected" : "")" @onclick="() => SetView(view)">@view.ToUpperInvariant()</button>@if (i < ViewOrder.Count - 1) { <span>/</span> } }</div>
+            <button class="settings-toggle" @onclick="ToggleSettings">⚙ <span>Settings</span></button>
+        </header>
+        }
+
+        @if (ShowSettings)
+        {
+            <section class="settings-panel">
+                <div class="settings-heading"><div><div class="eyebrow">DBLC CONFIGURATION</div><h2>Settings</h2></div><button class="icon-button" @onclick="CloseSettings">×</button></div>
+                <div class="settings-layout">
+                    <nav class="settings-nav" aria-label="Settings sections">
+                        @foreach (var settingsTab in SettingsSections)
+                        {
+                            <button class="settings-nav-item @(SettingsSection == settingsTab ? "selected" : "")" @onclick="() => SelectSettingsSection(settingsTab)">@settingsTab</button>
+                        }
+                    </nav>
+                    <div class="settings-content">
+                @if (SettingsSection == "GENERAL")
+                {
+                    <div class="settings-section-scroll">
+                <div class="settings-grid">
+                    <label>OpenAI-compatible endpoint<input @bind="State.Endpoint" @bind:event="oninput" placeholder="http://127.0.0.1:8081/v1" /></label>
+                    <label>Fallback model id<input @bind="State.Model" @bind:event="oninput" placeholder="Used if model discovery is unavailable" /></label>
+                    @if (!MobileHost) { <label class="wide">Library folder<div class="folder-input"><input readonly value="@State.LibraryFolder" /><button class="outline-button" @onclick="PickFolder">Choose folder</button></div></label> }
+                    else { <label class="wide">Library folder<div class="folder-input"><input readonly value="Managed on this PC" /><button class="outline-button" disabled>PC only</button></div></label> }
+                </div>
+                @if (!string.IsNullOrWhiteSpace(LibraryStatus)) { <div class="npc-editor-status">@LibraryStatus</div> }
+                <label class="chronicle-text-size-setting"><span><strong>Chronicle Text Size</strong><small>Scales message prose and speaker portraits. Larger text wraps sooner and may make the Chronicle longer to scroll.</small></span><select value="@State.ChronicleTextSizePercent" @onchange="SetChronicleTextSize"><option value="100">Normal · 100%</option><option value="112">Large · 112%</option><option value="125">Extra Large · 125%</option></select></label>
+                <div class="view-order-setting"><div class="eyebrow">NAVIGATION ORDER</div><div class="view-order-list">@foreach (var item in ViewOrder) { <div class="view-order-row"><span>@item</span><div><button class="order-button" title="Move up" disabled="@(ViewOrder.IndexOf(item) == 0)" @onclick="() => MoveView(item, -1)">↑</button><button class="order-button" title="Move down" disabled="@(ViewOrder.IndexOf(item) == ViewOrder.Count - 1)" @onclick="() => MoveView(item, 1)">↓</button></div></div> }</div></div>
+                @if (!MobileHost)
+                {
+                    <section class="privacy-lock-setting">
+                        <div class="eyebrow">DESKTOP PRIVACY</div>
+                        <label class="gm-expression-setting"><span><strong>Close to system tray</strong><small>Closing the window keeps DBLC and mobile access running. Use the tray icon to reopen or exit.</small></span><input type="checkbox" checked="@Privacy.CloseToTrayEnabled" @onchange="ToggleCloseToTray" /></label>
+                        <label class="gm-expression-setting"><span><strong>Require PIN when opening DBLC</strong><small>Protects startup and opening from the tray with the same four-digit PIN.</small></span><input type="checkbox" checked="@Privacy.HasPin" @onchange="TogglePrivacyPin" /></label>
+                        @if (Privacy.HasPin) { <button class="outline-button" @onclick="ChangePrivacyPin">Change PIN</button><button class="outline-button" @onclick="RemovePrivacyPin">Remove PIN</button> }
+                        <p>PIN protects the DBLC window from casual access. It does not encrypt campaign data and can be reset locally.</p>
+                        @if (!string.IsNullOrEmpty(PrivacyStatus)) { <div class="player-mark-error">@PrivacyStatus</div> }
+                    </section>
+                }
+                <label class="gm-expression-setting"><span><strong>GM Flavor Fonts</strong><small>Allow occasional typographic styles and visual glitch effects for character voices.</small></span><input type="checkbox" @bind="State.GmFlavorFontsEnabled" /></label>
+                <label class="gm-expression-setting"><span><strong>GM thinking sigil</strong><small>Replace the lower-left thinking dots and rotating text with the animated 45px ASCII sigil. The upper-right status stays the same.</small></span><input type="checkbox" @bind="State.GmThinkingSigilEnabled" /></label>
+                                <section class="gm-presentation-settings">
+                    <div class="eyebrow">GM PRESENTATION</div>
+                    <label class="gm-expression-setting"><span><strong>Enable streaming effects</strong><small>New GM narration arrives with a brief one-shot visual effect. Off by default; reduced-motion settings are always respected.</small></span><input type="checkbox" @bind="State.GmStreamAnimationsEnabled" @bind:after="OnGmPresentationSettingsChanged" /></label>
+                    <label class="gm-presentation-select"><span>Default effect</span><select @bind="State.GmStreamDefaultEffect" @bind:after="OnGmPresentationSettingsChanged" disabled="@(!State.GmStreamAnimationsEnabled)">@foreach (var effect in GmNarrationMarkerParser.Effects) { <option value="@effect">@PresentationEffectLabel(effect)</option> }</select></label>
+                    <label class="gm-expression-setting"><span><strong>Allow GM-selected inline effects</strong><small>The GM may use optional narration markers to change effects temporarily. Markers stay hidden even when this is off.</small></span><input type="checkbox" @bind="State.GmInlineStreamEffectsEnabled" @bind:after="OnGmPresentationSettingsChanged" disabled="@(!State.GmStreamAnimationsEnabled)" /></label>
+                </section>
+                <label class="gm-expression-setting vision-setting"><span><strong>Vision</strong><small>Allow PNG and JPEG image input in the Table composer.</small></span><input type="checkbox" @bind="State.VisionEnabled" @bind:after="OnVisionSettingChanged" /></label>
+                <section class="mobile-access-setting">
+                    <div class="eyebrow">PRIVATE PHONE ACCESS</div>
+                    <h3>Mobile Web</h3>
+                    <p>When enabled, DBLC starts a browser host on this PC's loopback address. Use Tailscale Serve to make it reachable only inside your tailnet.</p>
+                    <label class="gm-expression-setting"><span><strong>Enable mobile browser access</strong><small>Off by default. This does not configure Tailscale or expose a public website.</small></span><input type="checkbox" checked="@State.MobileRemoteAccessEnabled" @onchange="ToggleMobileAccess" /></label>
+                    <div class="mobile-access-actions"><button class="outline-button" @onclick="GenerateMobileAccessCode">@(State.HasMobileAccessCode ? "Rotate access code" : "Create access code")</button>@if (!string.IsNullOrWhiteSpace(State.MobileAccessCodeToShow)) { <code>@State.MobileAccessCodeToShow</code> }</div>
+                    @if (!string.IsNullOrWhiteSpace(MobileAccessError)) { <div class="player-mark-error">@MobileAccessError</div> }
+                    <div class="mobile-host-status">@MobileWeb.Status</div>
+                    @if (State.MobileRemoteAccessEnabled) { <div class="mobile-serve-command"><span>After Tailscale is signed in on both devices, run in a terminal with Tailscale permission:</span><code>tailscale serve @State.MobileRemoteAccessPort</code><small>Use Serve only. Do not enable Funnel. Run <code>tailscale serve status</code> to see the private URL.</small></div> }
+                </section>
+                <section class="player-mark-setting">
+                    <div class="player-mark-heading"><div><div class="eyebrow">CHRONICLE PRESENTATION</div><h3>Player Mark</h3><p>Choose one character for your Chronicle messages.</p></div><button class="outline-button" @onclick="ResetPlayerMark">Reset to Default</button></div>
+                    <div class="player-mark-control"><input @bind="PlayerMarkDraft" @bind:event="oninput" maxlength="2" list="player-mark-options" aria-label="Player Mark" /><span class="avatar player-mark-preview">@PlayerMarkPreview</span></div>
+                    <datalist id="player-mark-options">@foreach (var mark in AppState.GmMarkPalette) { <option value="@mark"></option> }</datalist>
+                    @if (!string.IsNullOrWhiteSpace(PlayerMarkError)) { <div class="player-mark-error">@PlayerMarkError</div> }
+                </section>
+                    </div>
+                }
+                @if (SettingsSection == "GM")
+                {
+                    <div class="settings-section-scroll">
+                <section class="gm-profile-setting">
+                    <div class="gm-profile-heading"><div><div class="eyebrow">PERSISTENT GM IDENTITY</div><h3>GM Profile</h3><p>Shape the GM’s voice, temperament, priorities, and approach to play. DBLC’s protected operating rules stay separate.</p></div><button class="outline-button" @onclick="ResetGmProfile">Reset to Default</button></div>
+                    <textarea class="gm-profile-editor" @bind="State.GmProfile" @bind:event="oninput" spellcheck="true" aria-label="GM Profile" />
+                </section>
+                    </div>
+                }
+                @if (SettingsSection == "SURPRISE")
+                {
+                    <div class="settings-section-scroll">
+                @if (State.ActiveCampaign is { } settingsCampaign)
+                {
+                    var machine = settingsCampaign.SurpriseMachine;
+                    <section class="surprise-settings">
+                        <div class="surprise-settings-heading"><div><div class="eyebrow">OPTIONAL CAMPAIGN ADDON</div><h3>Surprise Machine</h3></div><label class="surprise-enabled"><input type="checkbox" @bind="machine.Enabled" /> Enabled</label></div>
+                        @if (!machine.Enabled)
+                        {
+                            <p class="surprise-note">Off: no beat counting, machine processing, or added context.</p>
+                        }
+                        else
+                        {
+                            <p class="surprise-note">Counts each completed player–GM exchange. When one fires, its packet is included in the GM’s next reply without an extra model call.</p>
+                            <div class="surprise-validation">@MachineSettingsError</div>
+                            <details class="surprise-section" open>
+                                <summary>Pacing</summary>
+                                <div class="surprise-fields">
+                                    <label>Eligible after · minimum<input type="number" min="1" step="1" @bind="machine.EligibilityMinimum" /></label>
+                                    <label>Eligible after · maximum<input type="number" min="1" step="1" @bind="machine.EligibilityMaximum" /></label>
+                                    <label>Event chance · minimum %<input type="number" min="0" max="100" step="0.1" @bind="machine.EventProbabilityMinimumPercent" /></label>
+                                    <label>Event chance · maximum %<input type="number" min="0" max="100" step="0.1" @bind="machine.EventProbabilityMaximumPercent" /></label>
+                                    <label>After a surprise, suppress new events · minimum beats<input type="number" min="1" step="1" @bind="machine.InterruptionDurationMinimum" /></label>
+                                    <label>After a surprise, suppress new events · maximum beats<input type="number" min="1" step="1" @bind="machine.InterruptionDurationMaximum" /></label>
+                                    <label>Cooldown · minimum beats<input type="number" min="0" step="1" @bind="machine.CooldownMinimum" /></label>
+                                    <label>Cooldown · maximum beats<input type="number" min="0" step="1" @bind="machine.CooldownMaximum" /></label>
+                                    <label>Attach a Campaign Trigger · %<input type="number" min="0" max="100" step="0.1" @bind="machine.CampaignTriggerChancePercent" /></label>
+                                </div>
+                                <p class="surprise-note">If eligible, the machine independently rolls the event chance on each exchange. The suppression and cooldown count completed exchanges; they do not set how long the fictional event lasts. Eligibility and event chance are drawn at the start of each cycle; range changes take effect next cycle. With no Campaign Triggers, the trigger roll is skipped.</p>
+                            </details>
+                            <details class="surprise-section">
+                                <summary>Aspect Weights <span>Relative weights</span></summary>
+                                <SurpriseWeightEditor AspectName="Magnitude" Weights="machine.MagnitudeWeights" Keys="SurpriseDefaults.Magnitudes" />
+                                <SurpriseWeightEditor AspectName="Source" Weights="machine.SourceWeights" Keys="SurpriseDefaults.Sources" />
+                                <SurpriseWeightEditor AspectName="Change" Weights="machine.ChangeWeights" Keys="SurpriseDefaults.Changes" />
+                                <SurpriseWeightEditor AspectName="Behavior" Weights="machine.BehaviorWeights" Keys="SurpriseDefaults.Behaviors" />
+                                <SurpriseWeightEditor AspectName="Relation" Weights="machine.RelationWeights" Keys="SurpriseDefaults.Relations" />
+                            </details>
+                            <details class="surprise-section">
+                                <summary>Campaign Triggers <span>@machine.CampaignTriggers.Count</span></summary>
+                                <p class="surprise-note">Triggers are written by you and supplement the normal packet. Relative chance = this weight ÷ total weight of all triggers. Example: weights 1, 1, and 2 = 25%, 25%, and 50% of trigger draws.</p>
+                                @foreach (var trigger in machine.CampaignTriggers)
+                                {
+                                    <div class="campaign-trigger-editor" @key="trigger">
+                                        <label>Name<input @bind="trigger.Name" maxlength="80" placeholder="Grateful Villagers" /></label>
+                                        <label>Prompt<textarea @bind="trigger.Prompt" maxlength="500" rows="2" placeholder="People from villages the party helped may appear or intervene." /></label>
+                                        <label>Weight<input type="number" min="0.01" step="0.1" @bind="trigger.Weight" /></label>
+                                        <span class="trigger-share">@TriggerShare(machine.CampaignTriggers, trigger).ToString("0.#")% of trigger draws</span>
+                                        <button class="outline-button" @onclick="() => machine.CampaignTriggers.Remove(trigger)">Remove</button>
+                                    </div>
+                                }
+                                <button class="outline-button" @onclick="() => machine.CampaignTriggers.Add(new CampaignTrigger())">+ Add Campaign Trigger</button>
+                            </details>
+                            <button class="outline-button surprise-reset" @onclick="ResetSurpriseDefaults">Reset to Defaults</button>
+                        }
+                    </section>
+                }
+                    </div>
+                }
+                @if (SettingsSection == "CAMPAIGN")
+                {
+                    <div class="settings-section-scroll campaign-settings-content">
+                @if (State.ActiveCampaign is { } notesCampaign)
+                {
+                    var gmNotes = State.GetGmNotes(notesCampaign.Id);
+                    var shownGmNotes = gmNotes.Where(note => GmNotesFocusedId is { } focusedId ? note.Id == focusedId :
+                        string.IsNullOrWhiteSpace(GmNotesFilter) || note.Text.Contains(GmNotesFilter, StringComparison.OrdinalIgnoreCase)).Take(50).ToList();
+                    var dateTimeSettings = notesCampaign.DateTimeSettings;
+                    var weekdaysValid = CampaignCalendar.TryParseNames(dateTimeSettings.CustomWeekdays, 32, out var configuredWeekdays, out _);
+                    var periodsValid = CampaignCalendar.TryParsePeriods(dateTimeSettings.CustomPeriods, out var configuredPeriods, out _);
+                    <section class="surprise-settings campaign-date-time-settings">
+                        <div class="surprise-settings-heading"><div><div class="eyebrow">FICTIONAL CAMPAIGN CLOCK</div><h3>Date &amp; Time</h3></div></div>
+                        <label class="surprise-enabled"><input type="checkbox" @bind="dateTimeSettings.UniversalTimeEnabled" /> Universal Time</label>
+                        <p class="surprise-note">Uses DBLC’s ordinary 24-hour day and current time. This is fictional campaign time, unrelated to your computer clock or timezone.</p>
+                        <label class="calendar-mode-field">Calendar
+                            <select value="@dateTimeSettings.CalendarMode" @onchange="e => ChangeCalendarMode(dateTimeSettings, e.Value?.ToString())">
+                                <option value="DayCount">Day Count</option>
+                                <option value="Gregorian">Gregorian</option>
+                                <option value="Custom">Custom</option>
+                            </select>
+                        </label>
+                        @if (dateTimeSettings.CalendarMode == "Gregorian")
+                        {
+                            <label class="calendar-anchor-field">Date on the current campaign day<input type="date" @bind="dateTimeSettings.GregorianAnchorDate" @bind:after="CalendarSettingsEdited" /></label>
+                            <p class="surprise-note">The selected date anchors to the campaign’s current canonical day when settings are saved.</p>
+                        }
+                        else if (dateTimeSettings.CalendarMode == "Custom")
+                        {
+                            <div class="calendar-custom-fields">
+                                <label>Weekdays · one per line<textarea rows="4" @bind="dateTimeSettings.CustomWeekdays" @bind:event="oninput" @bind:after="CalendarSettingsEdited" aria-label="Custom calendar weekdays" /></label>
+                                <label>Months / periods · Name, days<textarea rows="4" @bind="dateTimeSettings.CustomPeriods" @bind:event="oninput" @bind:after="CalendarSettingsEdited" placeholder="Firstmonth, 30&#10;Secondmonth, 27" aria-label="Custom calendar periods" /></label>
+                                <div class="calendar-current-date-grid">
+                                    <label>Current weekday<input @bind="dateTimeSettings.CustomAnchorWeekday" @bind:event="oninput" @bind:after="CalendarSettingsEdited" list="calendar-weekday-options" /></label>
+                                    <label>Day of month<input type="number" min="1" max="1000" @bind="dateTimeSettings.CustomAnchorDay" @bind:after="CalendarSettingsEdited" /></label>
+                                    <label>Current month<input @bind="dateTimeSettings.CustomAnchorPeriod" @bind:event="oninput" @bind:after="CalendarSettingsEdited" list="calendar-period-options" /></label>
+                                    <label>Year<input type="number" min="0" max="2000000" @bind="dateTimeSettings.CustomAnchorYear" @bind:after="CalendarSettingsEdited" /></label>
+                                    <label class="calendar-era-field">Era · optional<input maxlength="60" @bind="dateTimeSettings.CustomEra" @bind:event="oninput" @bind:after="CalendarSettingsEdited" /></label>
+                                </div>
+                                <datalist id="calendar-weekday-options">@if (weekdaysValid) { @foreach (var weekday in configuredWeekdays) { <option value="@weekday"></option> } }</datalist>
+                                <datalist id="calendar-period-options">@if (periodsValid) { @foreach (var period in configuredPeriods) { <option value="@period.Name"></option> } }</datalist>
+                                <p class="surprise-note">This date anchors to the campaign’s current canonical day when settings are saved. Weekdays and periods advance deterministically from it.</p>
+                            </div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(CalendarSettingsError)) { <div class="surprise-validation">@CalendarSettingsError</div> }
+                    </section>
+                    <section class="gm-notes-setting">
+                        <div class="gm-notes-heading"><div><div class="eyebrow">CAMPAIGN NOTEBOOK</div><h3>GM Notes</h3><p>Durable campaign-running reference: rulings, procedures, house rules, and other player-approved understandings. The GM reads them only when useful.</p></div></div>
+                        <div class="gm-note-transfer-actions">
+                            <button class="outline-button" @onclick="ExportGmNotesJson">Export JSON</button>
+                            <button class="outline-button" @onclick="ExportGmNotesMarkdown">Export Markdown</button>
+                            <label class="outline-button mobile-file-button">Import JSON<InputFile accept=".json,application/json" OnChange="LoadGmNoteImport" /></label>
+                        </div>
+                        <p class="surprise-note">Export and import the selected campaign's GM Notes. JSON preserves note IDs for transfer to another installation.</p>
+                        @if (!string.IsNullOrWhiteSpace(GmNoteTransferStatus)) { <div class="surprise-validation" role="status">@GmNoteTransferStatus</div> }
+                        @if (GmNoteImportPlan is { } notePlan && notePlan.CampaignId == notesCampaign.Id)
+                        {
+                            <div class="gm-note-import-preview">
+                                <strong>Import preview · @GmNoteImportFileName</strong>
+                                <p>Create @notePlan.CreatedCount · Update @notePlan.UpdatedCount · Skip @notePlan.Skipped · Reject @notePlan.Rejected</p>
+                                <label><input type="checkbox" @bind="GmNoteImportAllowUpdates" @bind:after="RefreshGmNoteImportPreview" /> Replace notes with matching IDs whose text differs</label>
+                                <p class="surprise-note">Conflicting IDs are rejected unless you explicitly allow updates. The selected campaign will be checked again before saving.</p>
+                                @foreach (var reason in notePlan.RejectionReasons) { <div class="surprise-validation">@reason</div> }
+                                <div class="gm-note-transfer-actions"><button class="outline-button" @onclick="ConfirmGmNoteImport" disabled="@(notePlan.CreatedCount + notePlan.UpdatedCount == 0)">Confirm Import</button><button class="text-button" @onclick="() => CancelGmNoteImport()">Cancel</button></div>
+                            </div>
+                        }
+                        @if (GmNotesFocusedId is not null) { <button class="text-button" @onclick="() => GmNotesFocusedId = null">Show all GM Notes</button> }
+                        else { <label class="gm-note-filter">Find a note<input @bind="GmNotesFilter" @bind:event="oninput" placeholder="Filter this campaign's notes…" /></label> }
+                        @if (gmNotes.Count == 0) { <div class="gm-notes-empty">No GM Notes are retained for this campaign.</div> }
+                        else { <p class="surprise-note">Showing @shownGmNotes.Count of @gmNotes.Count notes. Filter to find a particular note; at most 50 are displayed at once.</p> }
+                        @foreach (var note in shownGmNotes)
+                        {
+                            <article @key="note.Id" class="gm-note-edit-row"><textarea @bind="note.Text" @bind:event="oninput" maxlength="1000" aria-label="GM Note" /><button class="text-button" title="Delete GM Note" @onclick="() => State.DeleteGmNote(notesCampaign.Id, note.Id)">Delete</button></article>
+                        }
+                        <div class="gm-note-new-row"><textarea @bind="NewGmNoteDraft" @bind:event="oninput" maxlength="1000" placeholder="Add a campaign note…" aria-label="New GM Note" /><button class="outline-button" @onclick="AddManualGmNote" disabled="@string.IsNullOrWhiteSpace(NewGmNoteDraft)">Add Note</button></div>
+                    </section>
+                }
+                @if (State.ActiveCampaign is { } threadsSettingsCampaign)
+                {
+                    var threadSettings = threadsSettingsCampaign.OpenThreadReminderSettings;
+                    <section class="surprise-settings open-thread-settings">
+                        <div class="surprise-settings-heading"><div><div class="eyebrow">CAMPAIGN CONTINUITY</div><h3>Open Threads</h3></div><label class="surprise-enabled"><input type="checkbox" @bind="threadSettings.Enabled" /> Reminders enabled</label></div>
+                        <p class="surprise-note">Occasionally reminds the GM of one unresolved campaign thread. A reminder is context, not an instruction; the GM decides whether it matters.</p>
+                        @if (threadSettings.Enabled)
+                        {
+                            <div class="surprise-fields open-thread-interval-fields">
+                                <label>Minimum reminder interval · beats<input type="number" min="1" max="1000" step="1" @bind="threadSettings.MinimumBeats" /></label>
+                                <label>Maximum reminder interval · beats<input type="number" min="1" max="1000" step="1" @bind="threadSettings.MaximumBeats" /></label>
+                            </div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(OpenThreadSettingsError)) { <div class="surprise-validation">@OpenThreadSettingsError</div> }
+                    </section>
+                }
+                @{
+                    var settingsPlayerThreads = State.GetPlayerOpenThreads(State.ActiveCampaignId);
+                }
+                <section class="settings-thread-ledger">
+                    <div class="gm-notes-heading"><div><div class="eyebrow">UNRESOLVED CAMPAIGN BUSINESS</div><h3>Player-visible Threads</h3><p>Loose ends, promises, and unanswered questions. Agenda is for when; Threads are for what remains unresolved.</p></div></div>
+                    @if (EditingPlayerThreadId is not null || CreatingPlayerThread)
+                    {
+                        <div class="open-thread-editor"><label>Thread<textarea @bind="PlayerThreadDraft" @bind:event="oninput" maxlength="600" placeholder="What is still unresolved?" aria-label="Open Thread text"></textarea></label><div class="open-thread-editor-count">@PlayerThreadDraft.Length / 600</div><div class="open-thread-editor-actions"><button class="outline-button" @onclick="CancelPlayerThreadEdit">Cancel</button><button class="primary-button small" @onclick="SavePlayerThreadEdit">@(CreatingPlayerThread ? "Add Thread" : "Save Thread")</button></div></div>
+                    }
+                    else
+                    {
+                        <button class="npc-create-button open-thread-add" @onclick="BeginPlayerThreadCreate"><span>＋</span> Add Player-visible Thread</button>
+                        <div class="open-thread-list" aria-label="Player-visible open threads">
+                            @foreach (var thread in settingsPlayerThreads)
+                            {
+                                <article @key="thread.Id" class="open-thread-card"><div class="open-thread-card-text">@thread.Text</div><div class="open-thread-card-actions"><button class="text-button" @onclick="() => BeginPlayerThreadEdit(thread)">Edit</button><button class="text-button" @onclick="() => ResolvePlayerThread(thread.Id)">Resolve</button></div></article>
+                            }
+                            @if (settingsPlayerThreads.Count == 0) { <div class="npc-empty">No open threads to show.</div> }
+                        </div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(PlayerThreadStatus)) { <div class="npc-editor-status">@PlayerThreadStatus</div> }
+                </section>
+                    </div>
+                }
+                    </div>
+                </div>
+                <div class="settings-foot"><span>Sessions are stored on this device.</span><button class="primary-button small" @onclick="SaveSettings">Save settings</button></div>
+            </section>
+        }
+
+                <div class="workspace">
+            @if (ActiveView == "Workspace")
+            {
+                <PaperView ViewName="Workspace" BrowserHost="@MobileHost" />
+            }
+            else if (ActiveView == "Player")
+            {
+                <PaperView ViewName="Player" BrowserHost="@MobileHost" />
+            }
+            else
+            {
+                <section class="chat-pane">
+                <div class="chat-heading">
+                    <div><div class="eyebrow">@(State.Current?.IsWorkbench == true ? $"WORKBENCH · SESSION {CurrentParentSession?.SessionNumber ?? 1}" : $"SESSION {State.Current?.SessionNumber ?? 1}{(State.Current?.IsEnded == true ? " · ENDED" : "")}")</div><h1>@(State.Current?.Title ?? "New session")</h1></div>
+                    <div class="connection"><span class="@(State.Busy || PlayerUpdateApplying ? "pulse-dot" : "online-dot")"></span>@(State.Busy || PlayerUpdateApplying || State.PendingPlayerUpdate is not null ? ActivityStatus : (ServerModelId ?? "LOCAL MODEL"))</div>
+                </div>
+                <div class="chronicle-viewport">
+                <div class="messages @(ChronicleNeedsInitialPosition ? "chronicle-positioning" : "")" style="--chronicle-text-scale: @State.ChronicleTextScaleCss" @ref="MessagesElement">
+                    <div class="messages-content">
+                    @if (!string.IsNullOrWhiteSpace(State.Current?.OpeningSummary))
+                    {
+                        <article class="session-opening-summary"><div class="session-opening-heading">PREVIOUS SESSION · @(State.Current?.PreviousSessionNumber ?? 0)</div><div><ChronicleText Text="@State.Current!.OpeningSummary" /></div></article>
+                    }
+                    @if (State.Current?.Lines.Count == 0)
+                    {
+                        <div class="welcome-card">
+                            <div class="welcome-mark"><GmThinkingSigil Size="144" Label="DBLC" /></div>
+                            <div class="eyebrow">@(State.Current?.IsWorkbench == true ? "TEMPORARY WORKBENCH" : "THE TABLE IS YOURS")</div>
+                            <h2>@(State.Current?.IsWorkbench == true ? "What are we working through?" : "What happens next?")</h2>
+                            <p>@(State.Current?.IsWorkbench == true ? "This conversation stays outside the Session Chronicle. When you end the Workbench, review any proposed campaign records and GM Notes before they are saved." : "Ask your GM anything. It can inspect the book catalogue and request pages when it needs them.")</p>
+                        </div>
+                    }
+                    @foreach (var line in State.Current?.Lines ?? [])
+                    {
+                        @if (line.Role == "archive")
+                        {
+                            <article class="archive-summary-card"><div class="archive-summary-heading"><span>✧</span><span>ARCHIVED CHRONICLE SUMMARY</span><small>Original lines preserved locally</small></div><div class="archive-summary-content"><ChronicleText Text="@line.Content" /></div></article>
+                        }
+                        else if (line.EntryType == "campaign_record")
+                        {
+                            <article class="campaign-record-message">
+                                <div class="campaign-record-label">CAMPAIGN RECORD</div>
+                                <div class="campaign-record-content message-content"><ChronicleText Text="@line.Content" /></div>
+                            </article>
+                        }
+                        else
+                        {
+                            {
+                                <article @key="line.Id" class="message @(line.Role == "user" ? "user-message" : "gm-message")">
+                                    @if (line.Role != "assistant" || line.PresentationSegments is not { Count: > 0 })
+                                    {
+                                        <div class="avatar">
+                                            @if (line.Role == "user" && CurrentPlayerPortrait is { } playerPortrait) { <button class="speaker-portrait-button" type="button" title="View @CurrentPlayerName portrait" aria-label="View @CurrentPlayerName portrait" @onclick="() => OpenChronicleImageViewer(playerPortrait.DataUrl, CurrentPlayerName)"><img src="@playerPortrait.DataUrl" alt="" style="@PlayerIdentityImageStyle(playerPortrait.Frame)" draggable="false" /></button> }
+                                            else if (line.Role == "user" && !string.IsNullOrWhiteSpace(CurrentPlayerName)) { @IdentityInitial(CurrentPlayerName) }
+                                            else { @(line.Role == "user" ? State.PlayerMark : (line.GmMark ?? CurrentGmMark)) }
+                                        </div>
+                                    }
+                                    <div class="message-body">
+                                        @if (line.Role == "assistant" && line.PresentationSegments is { Count: > 0 } segments)
+                                        {
+                                            @for (var segmentIndex = 0; segmentIndex < segments.Count; segmentIndex++)
+                                            {
+                                                var segment = segments[segmentIndex];
+                                                var showSpeakerHeader = segmentIndex == 0 || !string.Equals(segments[segmentIndex - 1].Speaker, segment.Speaker, StringComparison.OrdinalIgnoreCase);
+                                                var speakerNpc = ResolveSpeakerNpc(segment);
+                                                var speakerPortrait = speakerNpc is null ? null : MobileHost
+                                                    ? PortraitStore.BrowserImageUrl(State.Current!.CampaignId, speakerNpc.Id, speakerNpc.PortraitExtension)
+                                                    : PortraitStore.ReadDataUrl(State.Current!.CampaignId, speakerNpc.Id, speakerNpc.PortraitExtension);
+                                                var liveGmResponse = State.Busy && line.Role == "assistant" && ReferenceEquals(State.Current?.Lines.LastOrDefault(), line);
+                                                <div class="gm-expression-segment">
+                                                    @if (showSpeakerHeader)
+                                                    {
+                                                        <div class="avatar speaker-avatar">
+                                                            @if (string.Equals(segment.Speaker, "GM", StringComparison.OrdinalIgnoreCase)) { @(line.GmMark ?? CurrentGmMark) }
+                                                            else if (speakerPortrait is not null) { <button class="speaker-portrait-button" type="button" title="View @segment.Speaker portrait" aria-label="View @segment.Speaker portrait" @onclick="() => OpenChronicleImageViewer(speakerPortrait, segment.Speaker)"><img src="@speakerPortrait" alt="" style="@NpcSpeakerPortraitStyle(speakerNpc!)" draggable="false" /></button> }
+                                                            else { @IdentityInitial(segment.Speaker) }
+                                                        </div>
+                                                    }
+                                                    else { <div class="avatar speaker-avatar speaker-avatar-spacer" aria-hidden="true"></div> }
+                                                    <div class="gm-expression-content">
+                                                        @if (showSpeakerHeader) { <div class="message-meta speaker-meta"><span>@(string.Equals(segment.Speaker, "GM", StringComparison.OrdinalIgnoreCase) ? "THE GM" : segment.Speaker)</span><span class="speaker-time">@(segmentIndex == 0 ? line.DisplayTimestamp.ToLocalTime().ToString("h:mm tt") : "")</span></div> }
+                                                        <div class="message-content @(FlavorClass(segment.Flavor))" data-clean-text="@segment.Text"><ChronicleText @key="segment.Id" Text="@segment.Text" Flavor="@segment.Flavor" Seed="@segment.GlitchSeed" StableKey="@($"{line.Id:N}:{segment.Id:N}")" FlavorsEnabled="@State.GmFlavorFontsEnabled" AnimationsEnabled="@State.GmStreamAnimationsEnabled" DefaultEffect="@State.GmStreamDefaultEffect" InlineEffectsEnabled="@State.GmInlineStreamEffectsEnabled" EffectSpans="@segment.NarrationEffectSpans" IsLiveResponse="@liveGmResponse" /></div>
+                                                    </div>
+                                                </div>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <div class="message-meta">@(line.Role == "user" ? (string.IsNullOrWhiteSpace(CurrentPlayerName) ? "YOU" : CurrentPlayerName) : "THE GM") <span>@line.DisplayTimestamp.ToLocalTime().ToString("h:mm tt")</span></div>
+                                            var liveGmResponse = State.Busy && line.Role == "assistant" && ReferenceEquals(State.Current?.Lines.LastOrDefault(), line);
+                                            <div class="message-content">@if (line.RollSides is not null) { @line.RollDisplayText } else { <ChronicleText Text="@line.Content" StableKey="@($"{line.Id:N}:0")" AnimationsEnabled="@State.GmStreamAnimationsEnabled" DefaultEffect="@State.GmStreamDefaultEffect" InlineEffectsEnabled="@State.GmInlineStreamEffectsEnabled" EffectSpans="@line.NarrationEffectSpans" IsLiveResponse="@liveGmResponse" /> }</div>
+                                        }
+                                        @if (line.Role == "user" && line.ImageAttachmentKey is { } imageKey && GetChronicleImageDataUrl(imageKey) is { } chronicleImageUrl)
+                                        {
+                                            <button class="chronicle-image-attachment" type="button" title="View attached image" @onclick="() => OpenChronicleImageViewer(chronicleImageUrl)"><img src="@chronicleImageUrl" alt="Image attached to this message" loading="lazy" /></button>
+                                        }
+                                        @if (line.Role == "assistant" && line.EntryType != ChatLine.TechnicalErrorEntryType && !string.IsNullOrWhiteSpace(line.Content) &&
+                                            line.Content != "(The model returned no text.)")
+                                        {
+                                            <GmNoteReferences References="line.GmNoteReferences" Sources="line.SourceReferences" AllowPrivateSources="@(!MobileHost)" OnOpen="OpenGmNoteReference" OnOpenSource="OpenSourceReference" />
+                                        }
+                                    </div>
+                                </article>
+                            }
+                        }
+                    }
+                    @if (State.Busy && (State.GmThinkingSigilEnabled || State.Current?.Lines.LastOrDefault()?.Content.Length == 0))
+                    {
+                        <div class="typing">
+                            @if (State.GmThinkingSigilEnabled)
+                            {
+                                <GmThinkingSigil />
+                            }
+                            else
+                            {
+                                <span></span><span></span><span></span><em>@ActivityStatus</em>
+                            }
+                        </div>
+                    }
+                    @if (State.Current?.Lines.Count > 0) { <div class="scroll-anchor"></div> }
+                    </div>
+                </div>
+                <button @ref="ChronicleJumpButtonElement" class="chronicle-jump-button" type="button" aria-label="Jump to latest" title="Jump to latest" aria-hidden="true" tabindex="-1" @onclick="JumpToLatest"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v15m-6-6 6 6 6-6" /></svg></button>
+                </div>
+                <form class="composer" @ref="ComposerFormElement" data-vision-enabled="@State.VisionEnabled.ToString().ToLowerInvariant()" data-busy="@((State.Busy || ResolvingModel).ToString().ToLowerInvariant())" @onsubmit="SendForm" @onsubmit:preventDefault>
+                    @if (State.VisionEnabled)
+                    {
+                        <InputFile id="composer-image-picker" class="composer-image-picker" OnChange="SelectComposerImage" accept="image/png,image/jpeg,.png,.jpg,.jpeg" disabled="@(State.Busy || ResolvingModel || State.Current?.IsEnded == true)" />
+                        @if (ComposerImage is { } attached)
+                        {
+                            <div class="composer-image-preview"><img src="@ComposerImageDataUrl" alt="Attached image preview" /><span title="@attached.Name">@attached.Name</span><button type="button" aria-label="Remove attached image" title="Remove image" @onclick="RemoveComposerImage">×</button></div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(ComposerImageError)) { <div class="composer-image-error">@ComposerImageError</div> }
+                    }
+                    <div class="composer-input-row">
+                        <textarea @ref="ComposerElement" @bind="Draft" @bind:event="oninput" placeholder="@(State.Current?.IsEnded == true ? "This session has ended." : "Ask the GM…")" rows="1" disabled="@((State.Busy && !State.CanSteerCurrentResponse) || ResolvingModel || SessionActionBusy || State.Current?.IsEnded == true)"></textarea>
+                        <div class="composer-actions">
+                            @if (State.VisionEnabled)
+                            {
+                                <button class="composer-attach-button" type="button" title="Attach PNG or JPEG" aria-label="Attach image" disabled="@(State.Busy || ResolvingModel || State.Current?.IsEnded == true)" @onclick="OpenComposerImagePicker"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.4 11.1 11.2 20.3a5.2 5.2 0 0 1-7.4-7.4l9.3-9.3a3.5 3.5 0 0 1 5 5l-9.3 9.3a1.8 1.8 0 0 1-2.5-2.5l8.8-8.8" /></svg></button>
+                            }
+                            <DiceRoller @bind-SelectedSides="SelectedDieSides" Disabled="@DiceControlsDisabled" ConversationId="@(State.Current?.Id)" OnRoll="RecordPlayerRoll" />
+                            <span class="composer-action-divider"></span>
+                            <button class="send-button send-icon-button @(State.Busy && string.IsNullOrWhiteSpace(Draft) ? "stop-generating" : "")" type="submit" aria-label="@(State.Busy && string.IsNullOrWhiteSpace(Draft) ? "Stop generation" : "Send message")" title="@(State.Busy && string.IsNullOrWhiteSpace(Draft) ? "Stop generation" : State.Busy ? "Steer the GM" : "Send")" disabled="@((State.Busy && !State.CanSteerCurrentResponse) || ResolvingModel || SessionActionBusy || State.Current?.IsEnded == true)">
+                                @if (State.Busy && string.IsNullOrWhiteSpace(Draft))
+                                {
+                                    <svg viewBox="0 0 28 28" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="1" /></svg>
+                                }
+                                else
+                                {
+                                    <svg viewBox="0 0 28 28" aria-hidden="true"><path d="M3 14h19M14 6l9 8-9 8" /></svg>
+                                }
+                            </button>
+                        </div>
+                    </div>
+                </form>
+                <div class="context-meter-wrap">
+                    <div class="context-meter-track" role="progressbar" aria-label="Model context usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="@ContextPercent" title="@ContextTooltip">
+                        <div class="context-meter-fill" style="width:@ContextFillWidth"></div>
+                    </div>
+                    <div class="context-meter-tooltip"><span>@ContextTooltip</span><b>@(State.Current?.IsWorkbench == true ? "Workbench context is separate from the parent Session and is discarded when you end it." : "At ~80%, DBLC summarizes older messages and keeps the originals available to the GM.")</b></div>
+                </div>
+            </section>
+
+            <aside class="library-pane">
+                <div class="library-tabs" role="tablist" aria-label="Reference pane">
+                    <button class="library-tab @(RightPaneTab == "Library" ? "selected" : "")" role="tab" aria-selected="@(RightPaneTab == "Library")" @onclick="ShowLibraryTab">Library</button>
+                    <button class="library-tab @(RightPaneTab == "NPCs" ? "selected" : "")" role="tab" aria-selected="@(RightPaneTab == "NPCs")" @onclick="ShowNpcTab">NPCs <span>@State.GetNpcs(State.ActiveCampaignId).Count</span></button>
+                    <button class="library-tab @(RightPaneTab == "Agenda" ? "selected" : "")" role="tab" aria-selected="@(RightPaneTab == "Agenda")" @onclick="ShowAgendaTab">Agenda</button>
+                    <button class="library-tab @(RightPaneTab == "Bestiary" ? "selected" : "")" role="tab" aria-selected="@(RightPaneTab == "Bestiary")" @onclick="ShowBestiaryTab">Bestiary <span>@State.GetBestiary(State.ActiveCampaignId).Count</span></button>
+                    <button class="library-tab @(RightPaneTab == "Maps" ? "selected" : "")" role="tab" aria-selected="@(RightPaneTab == "Maps")" @onclick="ShowMapsTab">Maps</button>
+                </div>
+                @if (RightPaneTab == "NPCs")
+                {
+                    <div class="panel-heading npc-panel-heading"><div><div class="eyebrow">CAMPAIGN NOTES</div><h2>NPCs</h2></div><span class="book-count">@State.GetNpcs(State.ActiveCampaignId).Count.ToString("00")</span></div>
+                    @if (EditingNpc is not null || CreatingNpc)
+                    {
+                        <div class="npc-editor">
+                            <button class="text-button npc-back" @onclick="CloseNpcEditor">‹ Back to NPCs</button>
+                            <section class="npc-portrait-card" aria-label="NPC portrait">
+                                @if (!string.IsNullOrWhiteSpace(EditingNpcPortraitUrl) && !NpcPortraitPositioning)
+                                {
+                                    <button class="npc-portrait-image-button" title="View original portrait" @onclick="OpenPortraitViewer"><img class="npc-portrait-image" src="@EditingNpcPortraitUrl" alt="Portrait of @NpcNameDraft" style="@NpcPortraitImageStyle" /></button>
+                                }
+                                else if (!string.IsNullOrWhiteSpace(EditingNpcPortraitUrl))
+                                {
+                                    <div class="npc-portrait-position-frame" @ref="NpcPortraitPositionFrameElement" data-x="@NpcPortraitFrame.X" data-y="@NpcPortraitFrame.Y" data-zoom="@NpcPortraitFrame.Zoom"><img class="npc-portrait-image" src="@EditingNpcPortraitUrl" alt="Adjust portrait framing" style="@NpcPortraitImageStyle" draggable="false" /></div>
+                                }
+                                else
+                                {
+                                    <div class="npc-portrait-placeholder" aria-label="No portrait uploaded">@NpcInitial(NpcNameDraft)</div>
+                                }
+                                <div class="npc-portrait-actions">
+                                    @if (MobileHost) { <label class="outline-button mobile-file-button">@(string.IsNullOrWhiteSpace(EditingNpcPortraitUrl) ? "Upload Portrait" : "Change Portrait")<InputFile accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" OnChange="UploadNpcPortrait" /></label> }
+                                    else { <button class="outline-button" @onclick="ChooseNpcPortrait">@(string.IsNullOrWhiteSpace(EditingNpcPortraitUrl) ? "Upload Portrait" : "Change Portrait")</button> }
+                                    @if (!string.IsNullOrWhiteSpace(EditingNpcPortraitUrl))
+                                    {
+                                        <button class="outline-button" @onclick="ToggleNpcPortraitPosition">@(NpcPortraitPositioning ? "Done" : "Position")</button>
+                                        @if (NpcPortraitPositioning)
+                                        {
+                                            <label class="npc-portrait-zoom">Zoom <input type="range" min="1" max="8" step="0.05" value="@NpcPortraitFrame.Zoom" @oninput="ChangeNpcPortraitZoom" /></label>
+                                            <span class="npc-portrait-position-hint">Drag the portrait inside its frame.</span>
+                                        }
+                                        <button class="text-button npc-remove-portrait" @onclick="RemoveNpcPortrait">Remove Portrait</button>
+                                    }
+                                </div>
+                            </section>
+                            <label>Name<input @bind="NpcNameDraft" @bind:event="oninput" maxlength="100" placeholder="NPC name" /></label>
+                            <label>Notes<textarea @bind="NpcNotesDraft" @bind:event="oninput" placeholder="Freeform notes…"></textarea></label>
+                            <label>Portrayal Cue <span class="field-hint">Optional casting note for voice, demeanor, quirks, or brief example dialogue. Keep secrets and history in Notes.</span><textarea @bind="NpcPortrayalCueDraft" @bind:event="oninput" maxlength="1200" placeholder="How should the GM portray this NPC?" aria-label="NPC portrayal cue"></textarea></label>
+                            <div class="npc-cue-count">@NpcPortrayalCueDraft.Length / 1,200</div>
+                            @if (!string.IsNullOrWhiteSpace(NpcEditorStatus)) { <div class="npc-editor-status">@NpcEditorStatus</div> }
+                            <div class="npc-editor-actions"><button class="outline-button" @onclick="SaveNpcEditor">Save</button>@if (EditingNpc is not null) { <button class="outline-button danger-button" @onclick="AskDeleteNpc">Delete</button> }</div>
+                        </div>
+                    }
+                    else
+                    {
+                        <label class="npc-search"><span aria-hidden="true">⌕</span><input @bind="NpcSearch" @bind:event="oninput" placeholder="Search NPCs..." aria-label="Search NPCs" /></label>
+                        <button class="npc-create-button" @onclick="BeginCreateNpc"><span>＋</span> New NPC</button>
+                        <div class="npc-list" aria-label="NPC cards">
+                            @foreach (var npc in FilteredNpcs)
+                            {
+                                <button @key="npc.Id" class="npc-list-item" @onclick="() => OpenNpc(npc)">@npc.Name<span>›</span></button>
+                            }
+                            @if (!FilteredNpcs.Any()) { <div class="npc-empty">@(string.IsNullOrWhiteSpace(NpcSearch) ? "No NPCs yet." : "No matching NPCs.")</div> }
+                        </div>
+                        <div class="library-foot npc-foot"><span>NPC cards belong to this campaign and are shared with the GM.</span></div>
+                    }
+                }
+                else if (RightPaneTab == "Agenda")
+                {
+                    var agendaCampaign = State.ActiveCampaign;
+                    var campaignMinute = agendaCampaign?.Clock?.TotalMinutes ?? 8 * 60;
+                    var dateTimeSettings = agendaCampaign?.DateTimeSettings;
+                    var playerEvents = State.GetPlayerAgenda(State.ActiveCampaignId);
+                    var upcomingEvents = playerEvents.Where(item => item.Status == "upcoming").OrderBy(item => item.DueMinute).ToList();
+                    var recentEvents = playerEvents.Where(item => item.Status is "reached" or "resolved")
+                        .OrderByDescending(item => item.Status == "resolved" ? item.ResolvedAtMinute ?? item.DueMinute : item.ReachedAtMinute ?? item.DueMinute).Take(6).ToList();
+                    EnsureAgendaCalendarView(dateTimeSettings);
+                    var currentCampaignDay = CampaignAgendaFormat.Day(campaignMinute);
+                    var hasCalendarPage = CampaignCalendar.TryGetMonthPage(dateTimeSettings, currentCampaignDay, AgendaMonthOffset, out var calendarPage);
+                    var playerEventsByDay = playerEvents.GroupBy(item => CampaignAgendaFormat.Day(item.DueMinute))
+                        .ToDictionary(group => (long)group.Key, group => group.OrderBy(item => item.DueMinute).ToList());
+                    <div class="panel-heading agenda-panel-heading"><div><div class="eyebrow">CAMPAIGN TIME</div><h2>Agenda</h2></div></div>
+                    <section class="agenda-now"><div class="agenda-section-label">NOW</div><div class="agenda-current-day">@CampaignCalendar.DateLabel(dateTimeSettings, campaignMinute)</div>@if (dateTimeSettings?.UniversalTimeEnabled != false) { <div class="agenda-current-time">@CampaignAgendaFormat.Daypart(campaignMinute) · @CampaignAgendaFormat.ClockTime(campaignMinute)</div> }</section>
+                    @if (hasCalendarPage && calendarPage is not null)
+                    {
+                        var monthPage = calendarPage;
+                        <section class="agenda-calendar" aria-label="Campaign calendar">
+                            <div class="agenda-calendar-heading"><div class="agenda-section-label">CALENDAR</div><button class="outline-button agenda-calendar-today" @onclick="AgendaCalendarToday">Today</button></div>
+                            <div class="agenda-calendar-navigation"><button class="agenda-calendar-arrow" aria-label="Previous month" title="Previous month" @onclick="() => NavigateAgendaMonth(-1)">‹</button><strong>@monthPage.Title</strong><button class="agenda-calendar-arrow" aria-label="Next month" title="Next month" @onclick="() => NavigateAgendaMonth(1)">›</button></div>
+                            <div class="agenda-calendar-scroll"><div class="agenda-calendar-grid" style="--agenda-weekdays:@monthPage.Weekdays.Count">
+                                @foreach (var weekday in monthPage.Weekdays) { <span class="agenda-calendar-weekday" title="@weekday">@weekday</span> }
+                                @for (var blank = 0; blank < monthPage.FirstWeekdayIndex; blank++) { <span class="agenda-calendar-blank" aria-hidden="true"></span> }
+                                @for (var number = 1; number <= monthPage.Days; number++)
+                                {
+                                    var day = monthPage.FirstCampaignDay + number - 1;
+                                    var isToday = day == currentCampaignDay;
+                                    var isSelected = day == SelectedAgendaDay;
+                                    var hasEvents = playerEventsByDay.ContainsKey(day);
+                                    <button @key="day" class="agenda-calendar-day @(isToday ? "today" : "") @(isSelected ? "selected" : "")" aria-label="@($"{monthPage.Title}, day {number}{(isToday ? ", today" : "")}{(hasEvents ? ", scheduled events" : "")}")" aria-pressed="@isSelected" disabled="@(day < 1)" @onclick="() => SelectAgendaDay(day)"><span>@number</span>@if (hasEvents) { <i aria-hidden="true"></i> }</button>
+                                }
+                            </div></div>
+                            @if (SelectedAgendaDay is { } selectedDay && monthPage.ContainsCampaignDay(selectedDay))
+                            {
+                                <div class="agenda-calendar-selected"><div class="agenda-section-label">@monthPage.Title · Day @(selectedDay - monthPage.FirstCampaignDay + 1)</div>
+                                    @if (playerEventsByDay.TryGetValue(selectedDay, out var dayEvents))
+                                    {
+                                        @foreach (var item in dayEvents) { <article class="agenda-item"><div class="agenda-item-time">@CampaignCalendar.EventDate(dateTimeSettings, item.DueMinute, campaignMinute) · @item.Status</div><div class="agenda-item-title">@item.Title</div></article> }
+                                    }
+                                    else { <div class="agenda-empty">No scheduled events on this day.</div> }
+                                </div>
+                            }
+                        </section>
+                    }
+                    <section class="agenda-section"><div class="agenda-section-label">UPCOMING</div>
+                        @if (upcomingEvents.Count == 0) { <div class="agenda-empty">No upcoming events.</div> }
+                        else { @foreach (var item in upcomingEvents) { <article class="agenda-item"><div class="agenda-item-time">@CampaignCalendar.EventDate(dateTimeSettings, item.DueMinute, campaignMinute)</div><div class="agenda-item-title">@item.Title</div></article> } }
+                    </section>
+                    <section class="agenda-section agenda-recent"><div class="agenda-section-label">RECENT</div>
+                        @if (recentEvents.Count == 0) { <div class="agenda-empty">No recent events.</div> }
+                        else { @foreach (var item in recentEvents) { var eventMinute = item.Status == "resolved" ? item.ResolvedAtMinute ?? item.DueMinute : item.ReachedAtMinute ?? item.DueMinute; <article class="agenda-item"><div class="agenda-item-time">@CampaignCalendar.EventDate(dateTimeSettings, eventMinute, campaignMinute) · @(item.Status == "resolved" ? "Resolved" : "Reached")</div><div class="agenda-item-title">@item.Title</div></article> } }
+                    </section>
+                }
+                else if (RightPaneTab == "Maps")
+                {
+                    var importedMaps = State.GetMapDisplayEntries(State.ActiveCampaignId);
+                    <div class="panel-heading maps-panel-heading"><div><div class="eyebrow">CAMPAIGN MAPS</div><h2>Maps</h2></div></div>
+                    <section class="maps-saved-section">
+                        <div class="agenda-section-label">IMPORTED IMAGES <span>@importedMaps.Count.ToString("00")</span></div>
+                        @if (!MobileHost) { <button class="outline-button maps-import-button" @onclick="ImportMapImage">Import map image</button> }
+                        @if (!string.IsNullOrWhiteSpace(ImportedMapStatus)) { <div class="map-ui-status">@ImportedMapStatus</div> }
+                        @if (importedMaps.Count == 0) { <div class="agenda-empty">No imported map images are available.</div> }
+                        else
+                        {
+                            <div class="maps-saved-list">
+                                @foreach (var map in importedMaps)
+                                {
+                                    <div @key="map.Id" class="maps-saved-row maps-imported-row">
+                                        <button class="maps-saved-item" title="Open @map.Title" @onclick="() => OpenImportedMap(map)">
+                                            <img class="maps-imported-thumb" src="@ImportedMapImageUrl(map, "thumbnail")" alt="" loading="lazy" />
+                                            <span><strong>@map.Title</strong><small>@map.Width × @map.Height</small></span><b>›</b>
+                                        </button>
+                                        @if (!MobileHost) { <button class="maps-delete-button" title="Manage @map.Title" aria-label="Manage @map.Title" @onclick="() => EditImportedMap(map.Id)">⋯</button> }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </section>
+                    <div class="library-foot npc-foot"><span>Imported maps are visual references.</span></div>
+                }
+                else if (RightPaneTab == "Bestiary")
+                {
+                    var bestiaryEntries = FilteredBestiary.ToList();
+                    <div class="panel-heading npc-panel-heading"><div><div class="eyebrow">CAMPAIGN FIELD GUIDE</div><h2>Bestiary</h2></div><span class="book-count">@State.GetBestiary(State.ActiveCampaignId).Count.ToString("00")</span></div>
+                    @if (CreatingBestiary || EditingBestiaryContent)
+                    {
+                        <div class="npc-editor bestiary-editor">
+                            <button class="text-button npc-back" @onclick="CloseBestiaryEditor">‹ Back to Bestiary</button>
+                            @if (BestiaryPositioning && !string.IsNullOrWhiteSpace(BestiaryPortraitUrl))
+                            {
+                                <div class="npc-portrait-position-frame bestiary-editor-position-frame" @ref="BestiaryPortraitPositionFrameElement" data-x="@BestiaryPortraitFrame.X" data-y="@BestiaryPortraitFrame.Y" data-zoom="@BestiaryPortraitFrame.Zoom"><img class="npc-portrait-image" src="@BestiaryPortraitUrl" alt="Adjust Bestiary portrait framing" style="@BestiaryPortraitImageStyle" draggable="false" /></div>
+                            }
+                            else if (ActiveBestiary is { } bestiaryBeingEdited)
+                            {
+                                <BestiaryCardView Entry="bestiaryBeingEdited" PortraitDataUrl="@BestiaryPortraitUrl" Frame="BestiaryPortraitFrame" OnPortraitClick="OpenBestiaryPortraitViewer" />
+                            }
+                            else
+                            {
+                                <div class="npc-portrait-card"><div class="npc-portrait-placeholder">@(string.IsNullOrWhiteSpace(BestiaryNameDraft) ? "?" : BestiaryNameDraft.Trim()[0].ToString().ToUpperInvariant())</div></div>
+                            }
+                            <div class="npc-portrait-actions">
+                                @if (MobileHost) { <label class="outline-button mobile-file-button">@(string.IsNullOrWhiteSpace(BestiaryPortraitUrl) ? "Upload Portrait" : "Change Portrait")<InputFile accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" OnChange="UploadBestiaryPortrait" /></label> }
+                                else { <button class="outline-button" @onclick="ChooseBestiaryPortrait">@(string.IsNullOrWhiteSpace(BestiaryPortraitUrl) ? "Upload Portrait" : "Change Portrait")</button> }
+                                @if (!string.IsNullOrWhiteSpace(BestiaryPortraitUrl))
+                                {
+                                    <button class="outline-button" @onclick="ToggleBestiaryPortraitPosition">@(BestiaryPositioning ? "Done" : "Position")</button>
+                                    @if (BestiaryPositioning)
+                                    {
+                                        <label class="npc-portrait-zoom">Zoom <input type="range" min="1" max="8" step="0.05" value="@BestiaryPortraitFrame.Zoom" @oninput="ChangeBestiaryPortraitZoom" /></label>
+                                        <span class="npc-portrait-position-hint">Drag the portrait inside its frame.</span>
+                                    }
+                                    <button class="text-button npc-remove-portrait" @onclick="RemoveBestiaryPortrait">Remove Portrait</button>
+                                }
+                            </div>
+                            <label>Name<input @bind="BestiaryNameDraft" @bind:event="oninput" maxlength="100" placeholder="Creature type" /></label>
+                            <label>Stat Block<textarea class="bestiary-stat-editor" @bind="BestiaryStatBlockDraft" @bind:event="oninput" placeholder="Standard reference stat block…"></textarea></label>
+                            <label>Campaign Notes<textarea @bind="BestiaryNotesDraft" @bind:event="oninput" placeholder="What the party has learned…"></textarea></label>
+                            @if (!string.IsNullOrWhiteSpace(BestiaryEditorStatus)) { <div class="npc-editor-status">@BestiaryEditorStatus</div> }
+                            <div class="npc-editor-actions bestiary-editor-actions"><button class="outline-button" @onclick="SaveBestiaryEditor">Save</button>@if (ActiveBestiary is not null) { <button class="outline-button danger-button" @onclick="AskDeleteBestiary">Delete</button> }</div>
+                        </div>
+                    }
+                    else if (ActiveBestiary is { } selectedBestiary)
+                    {
+                        <div class="bestiary-detail">
+                            <button class="text-button npc-back" @onclick="CloseBestiaryDetail">‹ Back to Bestiary</button>
+                            <BestiaryCardView Entry="selectedBestiary" PortraitDataUrl="@BestiaryPortraitUrl" Frame="BestiaryPortraitFrame" OnPortraitClick="OpenBestiaryPortraitViewer" />
+                            <div class="bestiary-detail-actions"><button class="outline-button" @onclick="BeginEditBestiary">Edit Card</button><button class="outline-button" @onclick="IncrementSelectedBestiary">+ Slain</button><button class="outline-button" @onclick="DecrementSelectedBestiary" disabled="@(selectedBestiary.Slain == 0)">− Slain</button></div>
+                            @if (!string.IsNullOrWhiteSpace(BestiaryEditorStatus)) { <div class="npc-editor-status">@BestiaryEditorStatus</div> }
+                            <div class="npc-portrait-actions">@if (MobileHost) { <label class="outline-button mobile-file-button">@(string.IsNullOrWhiteSpace(BestiaryPortraitUrl) ? "Upload Portrait" : "Change Portrait")<InputFile accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" OnChange="UploadBestiaryPortrait" /></label> } else { <button class="outline-button" @onclick="ChooseBestiaryPortrait">@(string.IsNullOrWhiteSpace(BestiaryPortraitUrl) ? "Upload Portrait" : "Change Portrait")</button> }@if (!string.IsNullOrWhiteSpace(BestiaryPortraitUrl)) { <button class="outline-button" @onclick="ToggleBestiaryPortraitPosition">@(BestiaryPositioning ? "Done" : "Position")</button><button class="text-button npc-remove-portrait" @onclick="RemoveBestiaryPortrait">Remove Portrait</button> }</div>
+                            @if (BestiaryPositioning && !string.IsNullOrWhiteSpace(BestiaryPortraitUrl))
+                            {
+                                <div class="npc-portrait-position-frame bestiary-detail-position-frame" @ref="BestiaryPortraitPositionFrameElement" data-x="@BestiaryPortraitFrame.X" data-y="@BestiaryPortraitFrame.Y" data-zoom="@BestiaryPortraitFrame.Zoom"><img class="npc-portrait-image" src="@BestiaryPortraitUrl" alt="Adjust Bestiary portrait framing" style="@BestiaryPortraitImageStyle" draggable="false" /></div>
+                                <label class="npc-portrait-zoom">Zoom <input type="range" min="1" max="8" step="0.05" value="@BestiaryPortraitFrame.Zoom" @oninput="ChangeBestiaryPortraitZoom" /></label><span class="npc-portrait-position-hint">Drag the portrait inside its frame.</span>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <label class="npc-search"><span aria-hidden="true">⌕</span><input @bind="BestiarySearch" @bind:event="oninput" placeholder="Search Bestiary…" aria-label="Search Bestiary" /></label>
+                        <button class="npc-create-button" @onclick="BeginCreateBestiary"><span>＋</span> New Entry</button>
+                        <div class="npc-list" aria-label="Bestiary entries">
+                            @foreach (var entry in bestiaryEntries)
+                            {
+                                <button @key="entry.Id" class="npc-list-item bestiary-list-item" @onclick="() => OpenBestiary(entry)"><span class="bestiary-list-name">@entry.Name</span><small>Slain @entry.Slain</small></button>
+                            }
+                            @if (bestiaryEntries.Count == 0) { <div class="npc-empty">@(string.IsNullOrWhiteSpace(BestiarySearch) ? "No creature types yet." : "No matching Bestiary entries.")</div> }
+                        </div>
+                        <div class="library-foot npc-foot"><span>Creature-type reference cards, kept with this campaign.</span></div>
+                    }
+                }
+                else
+                {
+                <div class="panel-heading"><div><div class="eyebrow">REFERENCE LIBRARY</div><h2>Library shelf</h2></div><span class="book-count">@State.Books.Count.ToString("00")</span></div>
+                <div class="library-controls"><span>@(State.Books.Count == 1 ? "1 PDF BOOK" : $"{State.Books.Count} PDF BOOKS")</span><button class="text-button" @onclick="PickFolder">Choose folder</button></div>
+                @if (!string.IsNullOrWhiteSpace(LibraryStatus)) { <div class="npc-editor-status">@LibraryStatus</div> }
+                @if (State.Books.Count == 0)
+                {
+                    <div class="empty-library"><div class="empty-mark">⌂</div><h3>No PDF books found</h3><p>Choose a folder containing one or more PDF books.</p><button class="outline-button" @onclick="PickFolder">Choose library folder</button></div>
+                }
+                else
+                {
+                    <div class="book-shelf">
+                        @foreach (var book in State.Books)
+                        {
+                            <button class="shelf-book @(State.PdfPath == book.Path ? "selected" : "")" @onclick="() => SelectBook(book.Path)" title="@(MobileHost ? book.Title : book.Path)">
+                                <span class="shelf-book-mark">▤</span><span class="shelf-book-copy"><strong>@book.Title</strong><small>@(book.PageCount is null ? "Pages unknown" : $"{book.PageCount} pages") · @(book.Error is null ? book.BookmarkCount == 0 ? "No bookmarks" : $"{book.BookmarkCount} bookmarks" : "Could not read PDF")</small>@if (!MobileHost) { <small class="shelf-book-path">@Path.GetDirectoryName(book.Path)</small> }</span><span class="shelf-arrow">›</span>
+                            </button>
+                        }
+                    </div>
+                    @if (State.SelectedBook is { } selected)
+                    {
+                        <div class="selected-book-info"><div class="book-info"><div class="book-title">@selected.Title</div><div class="book-edition">@(selected.PageCount is null ? "PDF could not be read" : $"{selected.PageCount} PDF pages")</div>@if (!MobileHost) { <div class="book-loc" title="@selected.Path"><span>⌖</span> @selected.Path</div> }</div>@if (MobileHost) { <a class="text-button mobile-pdf-link" href="/library/@Uri.EscapeDataString(selected.Id)" target="_blank" rel="noopener">Open PDF ↗</a> } else { <button class="text-button" @onclick="OpenPdf">Open in PDF viewer ↗</button> }</div>
+                        <div class="catalogue-wrap">
+                            <div class="catalogue-heading"><span>BOOKMARK CATALOGUE</span><span class="catalogue-count">@selected.BookmarkCount</span></div>
+                            @if (selected.Error is not null)
+                            {
+                                <div class="catalogue-note">This PDF could not be read: @selected.Error</div>
+                            }
+                            else if (selected.BookmarkCount == 0)
+                            {
+                                <div class="catalogue-note">No bookmarks in this book. The GM can still request page ranges.</div>
+                            }
+                            else
+                            {
+                                <div class="catalogue-note">Select a book to view its bookmarks. The GM chooses what to read.</div>
+                                <div class="toc-list shelf-catalogue">
+                                    @foreach (var entry in Catalogue.Take(10))
+                                    {
+                                        <div class="toc-row" style="padding-left:@(8 + entry.Depth * 11)px"><span>@entry.Title</span><span class="toc-page">@(entry.Page is null ? "···" : $"{entry.Page:00}")</span></div>
+                                    }
+                                    @if (Catalogue.Count > 10) { <button class="text-button more-toc" @onclick="ShowCatalogue">See all @Catalogue.Count bookmarks →</button> }
+                                </div>
+                            }
+                        </div>
+                    }
+                }
+                <div class="library-rule"></div>
+                <div class="library-foot"><span class="lock-mark">▣</span><span>Library stays on this device.<br/><b>Only requested pages go to the GM.</b></span></div>
+                }
+            </aside>
+            }
+        </div>
+    </main>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(CatalogueText))
+{
+    <div class="modal-backdrop" @onclick="CloseCatalogue">
+        <section class="catalogue-modal" @onclick:stopPropagation>
+            <div class="modal-top"><div><div class="eyebrow">BOOKMARKS · @State.SelectedBook?.Title</div><h2>Book catalogue</h2></div><button class="icon-button" @onclick="CloseCatalogue">×</button></div>
+            <div class="modal-catalogue">@foreach (var entry in Catalogue) { <div class="toc-row" style="padding-left:@(14 + entry.Depth * 18)px"><span>@entry.Title</span><span class="toc-page">@(entry.Page is null ? "" : $"PDF p. {entry.Page}")</span></div> }</div>
+            <p class="modal-note">This catalogue is available to the GM. The GM requests the pages it decides to read.</p>
+        </section>
+    </div>
+}
+@if (CitedArchiveSource is { } citedArchive)
+{
+    <div class="modal-backdrop" @onclick="() => CitedArchiveSource = null">
+        <section class="catalogue-modal" role="dialog" aria-modal="true" aria-label="Archived Chronicle excerpt" @onclick:stopPropagation>
+            <div class="modal-top"><div><div class="eyebrow">ARCHIVED CHRONICLE</div><h2>@citedArchive.Title</h2></div><button class="icon-button" aria-label="Close excerpt" @onclick="() => CitedArchiveSource = null">×</button></div>
+            <div class="modal-catalogue">
+                @foreach (var archivedLine in State.GetCitedArchiveExcerpt(citedArchive))
+                {
+                    <div class="source-excerpt-line"><strong>@(archivedLine.EntryType == "campaign_record" ? "CAMPAIGN RECORD" : archivedLine.Role == "user" ? "PLAYER" : "THE GM")</strong><div>@archivedLine.ContextContent</div></div>
+                }
+            </div>
+        </section>
+    </div>
+}
+
+
+@if (HoveredSession is { SessionSummary.Length: > 0 } hovered)
+{
+    <aside class="session-summary-hover" style="left:max(250px,min(@(HoverX)px,calc(100vw - 360px)));top:min(@(HoverY)px,calc(100vh - 290px))" @onmouseenter="CancelHideSessionSummary" @onmouseleave="ScheduleHideSessionSummary">
+        <div class="session-summary-hover-heading"><span>SESSION @(hovered.SessionNumber ?? 1) SUMMARY</span>@if (IsSummaryStale(hovered)) { <small>OLDER RECAP</small> }</div>
+        <div class="session-summary-hover-copy"><ChronicleText Text="@hovered.SessionSummary" /></div>
+    </aside>
+}
+@if (MenuSession is { } menuSession)
+{
+    <div class="session-menu-backdrop" @onclick="CloseSessionMenu" @oncontextmenu:preventDefault>
+        <div class="session-context-menu" style="left:min(@(MenuX)px,calc(100vw - 190px));top:min(@(MenuY)px,calc(100vh - 210px))" @onclick:stopPropagation>
+            <button @onclick="BeginRenameSession">Rename</button>
+            <button @onclick="DuplicateSession">Duplicate</button>
+            <button @onclick="ExportSession">Export</button>
+            <div></div>
+            <button class="danger-action" @onclick="ConfirmDeleteSession">Delete</button>
+        </div>
+    </div>
+}
+@if (RenamingSession is { } renameSession)
+{
+    <div class="modal-backdrop" @onclick="CloseRenameSession">
+        <section class="session-dialog" @onclick:stopPropagation>
+            <div class="modal-top"><div><div class="eyebrow">SESSION @(renameSession.SessionNumber ?? 1)</div><h2>Rename session</h2></div><button class="icon-button" @onclick="CloseRenameSession">×</button></div>
+            <label class="session-dialog-label">Session name<input @bind="RenameDraft" @bind:event="oninput" @onkeydown="HandleRenameKey" /></label>
+            <div class="session-dialog-actions"><button class="outline-button" @onclick="CloseRenameSession">Cancel</button><button class="primary-button small" @onclick="SaveSessionRename">Save name</button></div>
+        </section>
+    </div>
+}
+@if (DeletingSession is { } deletingSession)
+{
+    <div class="modal-backdrop" @onclick="CancelDeleteSession">
+        <section class="session-dialog" @onclick:stopPropagation>
+            <div class="modal-top"><div><div class="eyebrow">SESSION @(deletingSession.SessionNumber ?? 1)</div><h2>Delete this session?</h2></div><button class="icon-button" @onclick="CancelDeleteSession">×</button></div>
+            <p class="session-delete-copy">“@deletingSession.Title” and its saved chronicle archive will be permanently removed from this device.</p>
+            <div class="session-dialog-actions"><button class="outline-button" @onclick="CancelDeleteSession">Cancel</button><button class="primary-button small danger-button" @onclick="DeleteSession">Delete session</button></div>
+        </section>
+    </div>
+}
+@if (ShowWorkbenchCreate)
+{
+    <div class="modal-backdrop" @onclick="CloseWorkbenchCreate">
+        <section class="session-dialog workbench-create-dialog" role="dialog" aria-modal="true" aria-label="Create Workbench" @onclick:stopPropagation>
+            <div class="modal-top"><div><div class="eyebrow">SESSION @(CurrentParentSession?.SessionNumber ?? 1)</div><h2>New Workbench</h2></div><button class="icon-button" @onclick="CloseWorkbenchCreate">×</button></div>
+            <label class="session-dialog-label">Workbench name<input @bind="WorkbenchNameDraft" @bind:event="oninput" maxlength="80" placeholder="OOC · Player agency" /></label>
+            <div class="session-dialog-actions"><button class="outline-button" @onclick="CloseWorkbenchCreate">Cancel</button><button class="primary-button small" @onclick="CreateWorkbench" disabled="@string.IsNullOrWhiteSpace(WorkbenchNameDraft)">Create Workbench</button></div>
+        </section>
+    </div>
+}
+@if (!MobileHost && State.PendingWorkbenchCreation is { } workbenchRequest)
+{
+    <div class="modal-backdrop">
+        <section class="session-dialog workbench-exit-dialog" role="dialog" aria-modal="true" aria-label="Workbench request">
+            <div class="modal-top"><div><div class="eyebrow">GM REQUEST</div><h2>Open “@workbenchRequest.Name”?</h2></div></div>
+            <p class="workbench-exit-copy">The GM would like to move this discussion into a temporary Workbench. Your Session Chronicle will stay separate.</p>
+            <div class="session-dialog-actions"><button class="outline-button" @onclick="() => State.ResolveWorkbenchCreation(workbenchRequest.Id, false)">Stay in Session</button><button class="primary-button small" @onclick="() => State.ResolveWorkbenchCreation(workbenchRequest.Id, true)">Open Workbench</button></div>
+        </section>
+    </div>
+}
+@if (!MobileHost && State.PendingWorkbenchExitReview is { } workbenchExit)
+{
+    <div class="modal-backdrop" @onclick="() => CancelWorkbenchExit(workbenchExit)">
+        <section class="session-dialog workbench-exit-dialog" role="dialog" aria-modal="true" aria-label="End Workbench" @onclick:stopPropagation>
+            <div class="modal-top"><div><div class="eyebrow">@workbenchExit.Name</div><h2>End Workbench</h2></div><button class="icon-button" title="Cancel and stay in Workbench" @onclick="() => CancelWorkbenchExit(workbenchExit)">×</button></div>
+            @if (workbenchExit.Artifacts.Count > 0)
+            {
+                <div class="workbench-exit-label">ALREADY RETAINED</div><ul class="workbench-artifacts">@foreach (var artifact in workbenchExit.Artifacts) { <li>✓ @artifact</li> }</ul>
+            }
+            @if (workbenchExit.Retention.ChronicleFacts.Count == 0)
+            {
+                <div class="workbench-exit-label">RETAIN IN CHRONICLE</div><p class="workbench-exit-copy">No established fictional facts will be retained.</p>
+            }
+            else
+            {
+                <div class="workbench-exit-label">RETAIN IN CHRONICLE</div>
+                <div class="workbench-proposed-notes">@foreach (var fact in workbenchExit.Retention.ChronicleFacts) { <blockquote>@fact</blockquote> }</div>
+            }
+            @if (workbenchExit.Retention.Notes.Count == 0)
+            {
+                <div class="workbench-exit-label">GM NOTES</div><p class="workbench-exit-copy">No GM Notes will be retained.</p>
+            }
+            else
+            {
+                <div class="workbench-exit-label">SAVING @workbenchExit.Retention.Notes.Count ITEM@(workbenchExit.Retention.Notes.Count == 1 ? "" : "S") TO GM NOTES</div>
+                <div class="workbench-proposed-notes">@foreach (var note in workbenchExit.Retention.Notes) { <blockquote>@note</blockquote> }</div>
+            }
+            <div class="workbench-discard-copy">Saved campaign artifacts are unaffected.<br />If you approve or discard, the Workbench will close after the GM reply completes.</div>
+            <div class="session-dialog-actions"><button class="outline-button" @onclick="() => CancelWorkbenchExit(workbenchExit)">Cancel</button><button class="outline-button discard-workbench-button" @onclick="() => DiscardWorkbenchFromReview(workbenchExit)">Discard &amp; Exit</button><button class="primary-button small" @onclick="() => ConfirmEndWorkbench(workbenchExit)">@(workbenchExit.Retention.Notes.Count == 0 && workbenchExit.Retention.ChronicleFacts.Count == 0 ? "End & Return" : "End & Save")</button></div>
+        </section>
+    </div>
+}
+
+@if (NpcPendingDelete is { } deletingNpc)
+{
+    <div class="modal-backdrop" @onclick="CancelDeleteNpc">
+        <section class="session-dialog" @onclick:stopPropagation>
+            <div class="modal-top"><div><div class="eyebrow">CAMPAIGN NPC</div><h2>Delete this NPC?</h2></div><button class="icon-button" @onclick="CancelDeleteNpc">×</button></div>
+            <p class="session-delete-copy">“@deletingNpc.Name” and its notes will be removed from this campaign.</p>
+            <div class="session-dialog-actions"><button class="outline-button" @onclick="CancelDeleteNpc">Cancel</button><button class="primary-button small danger-button" @onclick="DeleteNpcCard">Delete NPC</button></div>
+        </section>
+    </div>
+}
+@if (BestiaryPendingDelete is { } deletingBestiary)
+{
+    <div class="modal-backdrop" @onclick="CancelDeleteBestiary">
+        <section class="session-dialog" role="dialog" aria-modal="true" aria-label="Delete Bestiary entry" @onclick:stopPropagation>
+            <div class="modal-top"><div><div class="eyebrow">CAMPAIGN BESTIARY</div><h2>Delete @deletingBestiary.Name?</h2></div><button class="icon-button" @onclick="CancelDeleteBestiary">×</button></div>
+            <p class="session-delete-copy">This creature-type reference card and its local portrait will be removed from the campaign.</p>
+            <div class="session-dialog-actions"><button class="outline-button" @onclick="CancelDeleteBestiary">Cancel</button><button class="primary-button small danger-button" @onclick="DeleteBestiaryCard">Delete Entry</button></div>
+        </section>
+    </div>
+}
+@if (State.PendingPlayerUpdate is { } playerUpdate)
+{
+    <div class="modal-backdrop player-update-backdrop" @onclick="CancelPlayerSheetUpdate">
+        <section class="session-dialog player-update-dialog" role="dialog" aria-modal="true" aria-label="Review Player Sheet update" @onclick:stopPropagation>
+            <div class="modal-top"><div><div class="eyebrow">PLAYER SHEET UPDATE</div><h2>Review proposed update</h2></div><button class="icon-button" title="Cancel" @onclick="CancelPlayerSheetUpdate" disabled="@PlayerUpdateApplying">×</button></div>
+            <div class="player-update-columns">
+                <section class="player-update-column"><div class="eyebrow">ORIGINAL</div><div class="player-update-document markdown-preview">@(string.IsNullOrWhiteSpace(playerUpdate.OriginalMarkdown) ? (MarkupString)"<p class=\"player-update-empty\">Player Sheet is empty.</p>" : (MarkupString)PlayerMarkdownRenderer.Render(playerUpdate.OriginalMarkdown, playerUpdate.CampaignId, PlayerImages, interactive: false))</div></section>
+                <section class="player-update-column"><div class="eyebrow">UPDATED</div><div class="player-update-document markdown-preview">@((MarkupString)PlayerMarkdownRenderer.Render(playerUpdate.UpdatedMarkdown, playerUpdate.CampaignId, PlayerImages, interactive: false))</div></section>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(PlayerUpdateError)) { <p class="player-update-error">@PlayerUpdateError</p> }
+            <div class="session-dialog-actions"><button class="outline-button" @onclick="CancelPlayerSheetUpdate" disabled="@PlayerUpdateApplying">Cancel</button><button class="primary-button small" @onclick="() => ApprovePlayerSheetUpdate(playerUpdate)" disabled="@PlayerUpdateApplying">@(PlayerUpdateApplying ? "Saving Player Sheet…" : "Apply Update")</button></div>
+        </section>
+    </div>
+}
+@if (State.PendingGmNote is { } gmNoteProposal)
+{
+    <div class="modal-backdrop gm-note-proposal-backdrop" @onclick="CancelGmNoteReview">
+        <section class="session-dialog gm-note-proposal-dialog" role="dialog" aria-modal="true" aria-label="Review GM Note" @onclick:stopPropagation>
+            <div class="modal-top"><div><div class="eyebrow">CAMPAIGN NOTEBOOK</div><h2>Save this GM Note?</h2></div><button class="icon-button" title="Cancel" @onclick="CancelGmNoteReview">×</button></div>
+            <p class="gm-note-proposal-copy">The GM proposes saving this as durable campaign-operating reference. It will be available to read on demand and will not be added to every GM request.</p>
+            <div class="gm-note-proposal-text">@gmNoteProposal.Text</div>
+            @if (!string.IsNullOrWhiteSpace(GmNoteProposalError)) { <p class="player-update-error">@GmNoteProposalError</p> }
+            <div class="session-dialog-actions"><button class="outline-button" @onclick="CancelGmNoteReview">Cancel</button><button class="primary-button small" @onclick="() => ApproveGmNoteReview(gmNoteProposal)">Save GM Note</button></div>
+        </section>
+    </div>
+}
+@if (State.PendingBestiaryProposal is { } bestiaryProposal)
+{
+    <div class="modal-backdrop bestiary-review-backdrop" @onclick="CancelBestiaryReview">
+        <section class="session-dialog bestiary-review-dialog" role="dialog" aria-modal="true" aria-label="Review Bestiary change" @onclick:stopPropagation>
+            <div class="modal-top"><div><div class="eyebrow">@(bestiaryProposal.IsCreate ? "ADD TO BESTIARY" : $"BESTIARY UPDATE · {bestiaryProposal.Updated.Name.ToUpperInvariant()}")</div><h2>@(bestiaryProposal.IsCreate ? bestiaryProposal.Updated.Name : "Review proposed card")</h2></div><button class="icon-button" title="Cancel" @onclick="CancelBestiaryReview" disabled="@BestiaryProposalApplying">×</button></div>
+            @if (bestiaryProposal.IsCreate)
+            {
+                <div class="bestiary-create-preview"><BestiaryCardView Entry="bestiaryProposal.Updated" PortraitDataUrl="@PortraitStore.ReadBestiaryDataUrl(bestiaryProposal.CampaignId, bestiaryProposal.Updated.Id, bestiaryProposal.Updated.PortraitExtension)" Frame="@PortraitStore.ReadBestiaryFrame(bestiaryProposal.CampaignId, bestiaryProposal.Updated.Id, bestiaryProposal.Updated.PortraitExtension)" /></div>
+            }
+            else if (bestiaryProposal.Original is { } originalBestiary)
+            {
+                <div class="player-update-columns bestiary-review-columns">
+                    <section class="player-update-column"><div class="eyebrow">ORIGINAL</div><div class="player-update-document bestiary-review-document"><BestiaryCardView Entry="originalBestiary" PortraitDataUrl="@PortraitStore.ReadBestiaryDataUrl(bestiaryProposal.CampaignId, originalBestiary.Id, originalBestiary.PortraitExtension)" Frame="@PortraitStore.ReadBestiaryFrame(bestiaryProposal.CampaignId, originalBestiary.Id, originalBestiary.PortraitExtension)" /></div></section>
+                    <section class="player-update-column"><div class="eyebrow">UPDATED</div><div class="player-update-document bestiary-review-document"><BestiaryCardView Entry="bestiaryProposal.Updated" PortraitDataUrl="@PortraitStore.ReadBestiaryDataUrl(bestiaryProposal.CampaignId, bestiaryProposal.Updated.Id, originalBestiary.PortraitExtension)" Frame="@PortraitStore.ReadBestiaryFrame(bestiaryProposal.CampaignId, originalBestiary.Id, originalBestiary.PortraitExtension)" /></div></section>
+                </div>
+            }
+            @if (!string.IsNullOrWhiteSpace(BestiaryProposalError)) { <p class="player-update-error">@BestiaryProposalError</p> }
+            <div class="session-dialog-actions"><button class="outline-button" @onclick="CancelBestiaryReview" disabled="@BestiaryProposalApplying">Cancel</button><button class="primary-button small" @onclick="() => ApproveBestiaryReview(bestiaryProposal)" disabled="@BestiaryProposalApplying">@(BestiaryProposalApplying ? "Saving…" : bestiaryProposal.IsCreate ? "Add to Bestiary" : "Apply Update")</button></div>
+        </section>
+    </div>
+}
+<ImageViewer IsOpen="ShowPortraitViewer" DataUrl="@EditingNpcPortraitUrl" Title="@NpcNameDraft" OnClose="ClosePortraitViewer" />
+<ImageViewer IsOpen="ShowBestiaryPortraitViewer" DataUrl="@BestiaryPortraitUrl" Title="@(ActiveBestiary?.Name ?? BestiaryNameDraft)" OnClose="CloseBestiaryPortraitViewer" />
+<ImageViewer IsOpen="ShowChronicleImageViewer" DataUrl="@ChronicleImageViewerDataUrl" Title="@ChronicleImageViewerTitle" OnClose="CloseChronicleImageViewer" />
+<ImageViewer IsOpen="ShowImportedMapViewer" DataUrl="@ImportedMapViewerUrl" Title="@ImportedMapViewerTitle" OnClose="CloseImportedMapViewer" />
+
+@if (EditingImportedMap is { } mapToEdit && !MobileHost)
+{
+    <div class="modal-backdrop" @onclick="CloseImportedMapEditor">
+        <section class="session-dialog saved-map-delete-dialog" role="dialog" aria-modal="true" aria-label="Manage imported map" @onclick:stopPropagation>
+            <div class="modal-top"><div><div class="eyebrow">IMPORTED CAMPAIGN MAP</div><h2>Manage map</h2></div><button class="icon-button" @onclick="CloseImportedMapEditor">×</button></div>
+            <label class="map-save-name maps-editor-name">Title<input @bind="ImportedMapTitleDraft" @bind:event="oninput" maxlength="100" /></label>
+            @if (ImportedMapDeleteConfirm) { <p class="map-ui-status">Delete this image from the campaign? This cannot be undone.</p> }
+            @if (!string.IsNullOrWhiteSpace(ImportedMapStatus)) { <div class="map-ui-status">@ImportedMapStatus</div> }
+            <div class="session-dialog-actions"><button class="outline-button" @onclick="DeleteEditingImportedMap">@(ImportedMapDeleteConfirm ? "Confirm delete" : "Delete map")</button><button class="primary-button small" @onclick="SaveImportedMapEditor">Save</button></div>
+        </section>
+    </div>
+}
+<ImageViewer IsOpen="ShowChronicleImageViewer" DataUrl="@ChronicleImageViewerDataUrl" Title="@ChronicleImageViewerTitle" OnClose="CloseChronicleImageViewer" />
+
+@code {
+    [Parameter] public bool MobileHost { get; set; }
+    [Parameter] public string MobileSection { get; set; } = "Table";
+    [Parameter] public Guid? FocusedGmNoteId { get; set; }
+    [Parameter] public EventCallback OnMobileClose { get; set; }
+    private string _lastMobileSection = "";
+    private string MobileSpaceHostClass => MobileSection switch
+    {
+        "Player" => "mobile-space-player",
+        "Workspace" => "mobile-space-workspace",
+        "Settings" => "mobile-space-settings",
+        _ => "mobile-space-reference"
+    };
+
+    private string MobileSectionTitle => MobileSection is "Library" or "NPCs" or "Agenda" or "Bestiary" or "Maps"
+        ? RightPaneTab
+        : MobileSection;
+
+    protected override void OnParametersSet()
+    {
+        if (FocusedGmNoteId is { } target) { SettingsSection = "CAMPAIGN"; GmNotesFocusedId = target; }
+        if (!MobileHost || string.Equals(_lastMobileSection, MobileSection, StringComparison.Ordinal)) return;
+        _lastMobileSection = MobileSection;
+        ShowSettings = MobileSection == "Settings";
+        if (MobileSection is "Player" or "Workspace")
+            ActiveView = MobileSection;
+        else
+        {
+            ActiveView = "Table";
+            if (MobileSection is "Library" or "NPCs" or "Agenda" or "Bestiary" or "Maps")
+                RightPaneTab = MobileSection;
+        }
+    }
+
+    private async Task CloseSettings()
+    {
+        if (MobileHost) await OnMobileClose.InvokeAsync();
+        else ShowSettings = false;
+    }
+
+    private Task ReturnToMobileChronicle() => OnMobileClose.InvokeAsync();
+
+    private string Draft = "";
+    private ElementReference ComposerElement;
+    private ElementReference ComposerFormElement;
+    private string ActiveView = "Table";
+    private List<string> ViewOrder = ViewOrderStore.DefaultOrder.ToList();
+    private string? ServerModelId;
+    private string CurrentGmMark => State.GetGmMark(ServerModelId ?? State.Model);
+    private const string GenericWaitingStatus = "Waiting for GM output…";
+    private string GenericActivityText = "GM is thinking…";
+    private CancellationTokenSource? _genericActivityRotation;
+    private bool PlayerUpdateApplying;
+    private string PlayerMarkDraft = "Y";
+    private string PlayerMarkError = "";
+    private string MobileAccessError = "";
+    private string PrivacyStatus = "";
+    private string LibraryStatus = "";
+    private string PlayerMarkPreview => AppState.TryNormalizePlayerMark(PlayerMarkDraft, out var mark) ? mark : "?";
+    private void ToggleCloseToTray(ChangeEventArgs args)
+    {
+        try { Privacy.SetCloseToTray(args.Value is true); PrivacyStatus = ""; }
+        catch (Exception error) { PrivacyStatus = "Could not save desktop privacy setting: " + error.Message; }
+    }
+    private void TogglePrivacyPin(ChangeEventArgs args)
+    {
+        if (args.Value is true) ChangePrivacyPin();
+        else RemovePrivacyPin();
+    }
+    private void ChangePrivacyPin()
+    {
+        try
+        {
+            if (System.Windows.Application.Current.Dispatcher.Invoke(() => PinPromptWindow.Configure(Privacy))) PrivacyStatus = "Privacy PIN saved.";
+        }
+        catch (Exception error) { PrivacyStatus = "Could not save privacy PIN: " + error.Message; }
+    }
+    private void RemovePrivacyPin()
+    {
+        try
+        {
+            var choice = System.Windows.Application.Current.Dispatcher.Invoke(() => System.Windows.MessageBox.Show(
+                "Remove the local privacy PIN? DBLC will open without a PIN.", "DBLC · Remove PIN",
+                System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question));
+            if (choice == System.Windows.MessageBoxResult.Yes) { Privacy.RemovePin(); PrivacyStatus = "Privacy PIN removed."; }
+        }
+        catch (Exception error) { PrivacyStatus = "Could not remove privacy PIN: " + error.Message; }
+    }
+    private static readonly byte[] PngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    private ComposerImageDraft? ComposerImage;
+    private string ComposerImageError = "";
+    private bool ShowChronicleImageViewer;
+    private string? ChronicleImageViewerDataUrl;
+    private string ChronicleImageViewerTitle = "Chronicle image";
+    private Guid? _chronicleImageCacheSessionId;
+    private readonly Dictionary<string, string> _chronicleImageDataUrls = new(StringComparer.OrdinalIgnoreCase);
+    private DotNetObjectReference<AppShell>? _composerImageReference;
+    private bool _composerImageInstallPending = true;
+    private string? ComposerImageDataUrl => ComposerImage is { } image ? $"data:{image.MimeType};base64,{Convert.ToBase64String(image.Bytes)}" : null;
+    private int? ServerContextLimit;
+    private bool ResolvingModel;
+    private bool ShowSettings;
+    private GmSourceReference? CitedArchiveSource;
+    private static readonly string[] SettingsSections = ["GENERAL", "GM", "CAMPAIGN", "SURPRISE"];
+    private string SettingsSection = "GENERAL";
+    private string CalendarSettingsError = "";
+    private bool CalendarSettingsChanged;
+    private Guid AgendaCalendarCampaignId;
+    private string AgendaCalendarMode = "";
+    private int AgendaMonthOffset;
+    private long? SelectedAgendaDay;
+    private string PlayerUpdateError = "";
+    private string RightPaneTab = "Library";
+    private bool ShowWorkbenchCreate;
+    private string WorkbenchNameDraft = "";
+    private string NewGmNoteDraft = "";
+    private string GmNotesFilter = "";
+    private Guid? GmNotesFocusedId;
+    private string GmNoteTransferStatus = "";
+    private string GmNoteImportFileName = "";
+    private string? GmNoteImportJson;
+    private bool GmNoteImportAllowUpdates;
+    private GmNoteTransfer.ImportPlan? GmNoteImportPlan;
+    private string WorkbenchExitError = "";
+    private ImportedCampaignMap? EditingImportedMap;
+    private string ImportedMapTitleDraft = "";
+    private bool ImportedMapDeleteConfirm;
+    private string ImportedMapStatus = "";
+    private bool ShowImportedMapViewer;
+    private Guid? ImportedMapViewerMapId;
+    private Guid ImportedMapViewerCampaignId;
+    private string? ImportedMapViewerUrl;
+    private string ImportedMapViewerTitle = "Map";
+    private readonly Dictionary<(Guid CampaignId, Guid MapId), string> _importedThumbCache = [];
+    private string _workbenchPlayerBaseline = "";
+    private string _workbenchWorkspaceBaseline = "";
+    private Guid _workbenchPaperCampaignId;
+    private string NpcSearch = "";
+    private NpcCard? EditingNpc;
+    private NpcCard? NpcPendingDelete;
+    private bool CreatingNpc;
+    private Guid PendingNpcId;
+    private Guid PendingNpcCampaignId;
+    private string? PendingNpcPortraitExtension;
+    private string NpcNameDraft = "";
+    private string NpcNotesDraft = "";
+    private string NpcPortrayalCueDraft = "";
+    private string NpcEditorStatus = "";
+    private Guid NpcUiCampaignId;
+    private string? EditingNpcPortraitUrl;
+    private bool ShowPortraitViewer;
+    private bool NpcPortraitPositioning;
+    private NpcPortraitFrame NpcPortraitFrame = new();
+    private ElementReference NpcPortraitPositionFrameElement;
+    private DotNetObjectReference<AppShell>? _npcPortraitPositionReference;
+    private string NpcPortraitImageStyle => FormattableString.Invariant($"object-position:50% 50%;transform:translate({NpcPortraitFrame.X}%,{NpcPortraitFrame.Y}%) scale({NpcPortraitFrame.Zoom})");
+    private string BestiarySearch = "";
+    private bool CreatingPlayerThread;
+    private Guid? EditingPlayerThreadId;
+    private string PlayerThreadDraft = "";
+    private string PlayerThreadStatus = "";
+    private BestiaryEntry? ActiveBestiary;
+    private bool CreatingBestiary;
+    private bool EditingBestiaryContent;
+    private Guid PendingBestiaryId;
+    private Guid PendingBestiaryCampaignId;
+    private string BestiaryNameDraft = "";
+    private string BestiaryStatBlockDraft = "";
+    private string BestiaryNotesDraft = "";
+    private string? BestiaryPortraitExtensionDraft;
+    private string? BestiaryPortraitUrl;
+    private string BestiaryEditorStatus = "";
+    private bool BestiaryPositioning;
+    private NpcPortraitFrame BestiaryPortraitFrame = new();
+    private ElementReference BestiaryPortraitPositionFrameElement;
+    private bool ShowBestiaryPortraitViewer;
+    private bool BestiaryProposalApplying;
+    private string BestiaryProposalError = "";
+    private string GmNoteProposalError = "";
+    private BestiaryEntry? BestiaryPendingDelete;
+    private string BestiaryPortraitImageStyle => FormattableString.Invariant($"object-position:50% 50%;transform:translate({BestiaryPortraitFrame.X}%,{BestiaryPortraitFrame.Y}%) scale({BestiaryPortraitFrame.Zoom})");
+    private string MachineSettingsError = "";
+    private string OpenThreadSettingsError = "";
+    private string? CatalogueText;
+    private List<LibraryEntry> Catalogue = [];
+    private ElementReference MessagesElement;
+    private ElementReference ChronicleJumpButtonElement;
+    private Guid? _chronicleSessionKey;
+    private bool _chronicleNavigationPending = true;
+    private bool _chronicleResetToLatestPending = true;
+    private int _observedBusy;
+    private int _responseActivePending = -1;
+    private bool ChronicleNeedsInitialPosition = true;
+    private bool SessionActionBusy;
+    private bool EndingSession;
+    private string SessionActionStatus = "";
+    private Conversation? MenuSession;
+    private Conversation? RenamingSession;
+    private Conversation? DeletingSession;
+    private Conversation? HoveredSession;
+    private CancellationTokenSource? _hoverHide;
+    private string RenameDraft = "";
+    private double MenuX;
+    private double MenuY;
+    private double HoverX;
+    private double HoverY;
+    private DotNetObjectReference<AppShell>? _sessionReorderReference;
+    private bool DiceControlsDisabled => State.Busy || ResolvingModel || SessionActionBusy || State.Current?.IsEnded == true;
+    private IEnumerable<NpcCard> FilteredNpcs => State.GetNpcs(State.ActiveCampaignId).Where(npc => string.IsNullOrWhiteSpace(NpcSearch) || npc.Name.Contains(NpcSearch.Trim(), StringComparison.OrdinalIgnoreCase)).OrderBy(npc => npc.Name, StringComparer.OrdinalIgnoreCase);
+    private IEnumerable<BestiaryEntry> FilteredBestiary => State.GetBestiary(State.ActiveCampaignId).Where(entry => string.IsNullOrWhiteSpace(BestiarySearch) || entry.Name.Contains(BestiarySearch.Trim(), StringComparison.OrdinalIgnoreCase)).OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase);
+    private Conversation? CurrentParentSession => State.Current is { IsWorkbench: true, ParentSessionId: { } parentId }
+        ? State.Conversations.FirstOrDefault(item => item.Id == parentId && !item.IsWorkbench)
+        : State.Current;
+
+    private void ShowLibraryTab() { CloseNpcEditor(); CloseBestiaryEditor(); CloseBestiaryDetail(); RightPaneTab = "Library"; }
+    private void ShowNpcTab() { CloseNpcEditor(); CloseBestiaryEditor(); CloseBestiaryDetail(); RightPaneTab = "NPCs"; }
+    private void ShowAgendaTab() { CloseNpcEditor(); CloseBestiaryEditor(); CloseBestiaryDetail(); RightPaneTab = "Agenda"; }
+    private void EnsureAgendaCalendarView(CampaignDateTimeSettings? settings)
+    {
+        var mode = CampaignDateTimeSettings.NormalizeMode(settings?.CalendarMode);
+        if (AgendaCalendarCampaignId == State.ActiveCampaignId && AgendaCalendarMode == mode) return;
+        AgendaCalendarCampaignId = State.ActiveCampaignId;
+        AgendaCalendarMode = mode;
+        AgendaMonthOffset = 0;
+        SelectedAgendaDay = null;
+    }
+    private void NavigateAgendaMonth(int direction) { AgendaMonthOffset = Math.Clamp(AgendaMonthOffset + direction, -24_000, 24_000); SelectedAgendaDay = null; }
+    private void AgendaCalendarToday() { AgendaMonthOffset = 0; SelectedAgendaDay = CampaignAgendaFormat.Day(State.GetCampaignMinute(State.ActiveCampaignId)); }
+    private void SelectAgendaDay(long day) => SelectedAgendaDay = day;
+    private void ShowMapsTab() { CloseNpcEditor(); CloseBestiaryEditor(); CloseBestiaryDetail(); RightPaneTab = "Maps"; }
+    private void ShowBestiaryTab() { CloseNpcEditor(); CloseBestiaryEditor(); CloseBestiaryDetail(); RightPaneTab = "Bestiary"; }
+    private void SelectSettingsSection(string section) { if (SettingsSections.Contains(section, StringComparer.Ordinal)) SettingsSection = section; }
+    private void CalendarSettingsEdited() { CalendarSettingsChanged = true; CalendarSettingsError = ""; }
+    private void ChangeCalendarMode(CampaignDateTimeSettings settings, string? mode)
+    {
+        settings.CalendarMode = CampaignDateTimeSettings.NormalizeMode(mode);
+        CalendarSettingsEdited();
+    }
+    private void BeginPlayerThreadCreate() { CreatingPlayerThread = true; EditingPlayerThreadId = null; PlayerThreadDraft = ""; PlayerThreadStatus = ""; }
+    private void BeginPlayerThreadEdit(OpenThread thread) { if (thread.Visibility != "player") return; CreatingPlayerThread = false; EditingPlayerThreadId = thread.Id; PlayerThreadDraft = thread.Text; PlayerThreadStatus = ""; }
+    private void CancelPlayerThreadEdit() { CreatingPlayerThread = false; EditingPlayerThreadId = null; PlayerThreadDraft = ""; }
+    private void SavePlayerThreadEdit()
+    {
+        if (!State.SavePlayerOpenThread(State.ActiveCampaignId, EditingPlayerThreadId, PlayerThreadDraft, out var error)) { PlayerThreadStatus = error; return; }
+        CreatingPlayerThread = false; EditingPlayerThreadId = null; PlayerThreadDraft = ""; PlayerThreadStatus = "Saved.";
+    }
+    private void ResolvePlayerThread(Guid id)
+    {
+        if (State.ResolvePlayerOpenThread(State.ActiveCampaignId, id)) PlayerThreadStatus = "Thread resolved.";
+    }
+    private string? ImportedMapImageUrl(ImportedMapDisplayEntry map, string kind)
+    {
+        if (MobileHost) return $"/campaign-maps/{State.ActiveCampaignId:D}/{map.Id:D}/{kind}";
+        if (kind != "thumbnail") return State.GetOwnerMapDataUrl(State.ActiveCampaignId, map.Id, kind);
+        var key = (CampaignId: State.ActiveCampaignId, MapId: map.Id);
+        if (!_importedThumbCache.TryGetValue(key, out var cached))
+            _importedThumbCache[key] = cached = State.GetOwnerMapDataUrl(key.CampaignId, key.MapId, "thumbnail") ?? "";
+        return cached;
+    }
+    private void OpenImportedMap(ImportedMapDisplayEntry map)
+    {
+        ImportedMapViewerMapId = map.Id;
+        ImportedMapViewerCampaignId = State.ActiveCampaignId;
+        ImportedMapViewerUrl = ImportedMapImageUrl(map, "original");
+        ImportedMapViewerTitle = map.Title;
+        ShowImportedMapViewer = !string.IsNullOrWhiteSpace(ImportedMapViewerUrl);
+        if (!ShowImportedMapViewer) ImportedMapStatus = "The image file for this map is unavailable.";
+    }
+    private void CloseImportedMapViewer() { ShowImportedMapViewer = false; ImportedMapViewerUrl = null; ImportedMapViewerMapId = null; }
+    private void ImportMapImage()
+    {
+        if (MobileHost) return;
+        using var dialog = new System.Windows.Forms.OpenFileDialog { Title = "Import campaign map", Filter = "Map images (*.png;*.jpg;*.jpeg;*.webp)|*.png;*.jpg;*.jpeg;*.webp", CheckFileExists = true, Multiselect = false };
+        if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        try
+        {
+            var file = new FileInfo(dialog.FileName);
+            if (file.Length is <= 0 or > CampaignMapAssetStore.MaxImageBytes) throw new InvalidDataException("Choose a map image smaller than 30 MB.");
+            var map = State.ImportCampaignMap(State.ActiveCampaignId, Path.GetFileNameWithoutExtension(file.Name), file.Name, File.ReadAllBytes(file.FullName));
+            ImportedMapStatus = $"Imported “{map.Title}”.";
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or NotSupportedException or UnauthorizedAccessException)
+        { ImportedMapStatus = "Map import failed: " + ex.Message; }
+    }
+    private void EditImportedMap(Guid mapId)
+    {
+        if (MobileHost) return;
+        var map = State.GetImportedMap(State.ActiveCampaignId, mapId);
+        if (map is null) return;
+        EditingImportedMap = map;
+        ImportedMapTitleDraft = map.Title;
+        ImportedMapDeleteConfirm = false;
+        ImportedMapStatus = "";
+    }
+    private void CloseImportedMapEditor() { EditingImportedMap = null; ImportedMapDeleteConfirm = false; }
+    private void SaveImportedMapEditor()
+    {
+        if (MobileHost || EditingImportedMap is not { } map) return;
+        ImportedMapStatus = State.UpdateImportedMap(State.ActiveCampaignId, map.Id, ImportedMapTitleDraft);
+        if (ImportedMapStatus == "Map updated.")
+        {
+            if (ImportedMapViewerMapId == map.Id) ImportedMapViewerTitle = map.Title;
+            EditingImportedMap = null;
+        }
+    }
+    private void DeleteEditingImportedMap()
+    {
+        if (MobileHost || EditingImportedMap is not { } map) return;
+        if (!ImportedMapDeleteConfirm) { ImportedMapDeleteConfirm = true; return; }
+        ImportedMapStatus = State.DeleteImportedMap(State.ActiveCampaignId, map.Id);
+        _importedThumbCache.Remove((State.ActiveCampaignId, map.Id));
+        EditingImportedMap = null;
+        ImportedMapDeleteConfirm = false;
+        CloseImportedMapViewer();
+    }
+    private void OpenNpc(NpcCard npc) { EditingNpc = npc; CreatingNpc = false; NpcNameDraft = npc.Name; NpcNotesDraft = npc.Notes; NpcPortrayalCueDraft = npc.PortrayalCue ?? ""; EditingNpcPortraitUrl = PortraitStore.ReadDataUrl(State.ActiveCampaignId, npc.Id, npc.PortraitExtension); NpcPortraitFrame = PortraitStore.ReadFrame(State.ActiveCampaignId, npc.Id, npc.PortraitExtension); NpcPortraitPositioning = false; NpcEditorStatus = ""; }
+    private void BeginCreateNpc() { EditingNpc = null; CreatingNpc = true; PendingNpcId = Guid.NewGuid(); PendingNpcCampaignId = State.ActiveCampaignId; PendingNpcPortraitExtension = null; NpcNameDraft = ""; NpcNotesDraft = ""; NpcPortrayalCueDraft = ""; EditingNpcPortraitUrl = null; NpcPortraitFrame = new(); NpcPortraitPositioning = false; ShowPortraitViewer = false; NpcEditorStatus = ""; }
+    private void CloseNpcEditor()
+    {
+        if (CreatingNpc && PendingNpcId != Guid.Empty) PortraitStore.DeletePortrait(PendingNpcCampaignId, PendingNpcId);
+        EditingNpc = null; CreatingNpc = false; PendingNpcId = Guid.Empty; PendingNpcCampaignId = Guid.Empty; PendingNpcPortraitExtension = null; EditingNpcPortraitUrl = null; NpcPortraitFrame = new(); NpcPortraitPositioning = false; NpcPortrayalCueDraft = ""; ShowPortraitViewer = false; NpcEditorStatus = "";
+    }
+    private void SaveNpcEditor()
+    {
+        if (!CreatingNpc && EditingNpc is null) return;
+        var name = CreatingNpc ? NpcNameDraft.Trim() : EditingNpc!.Name;
+        var creating = CreatingNpc;
+        var response = State.SaveNpc(State.ActiveCampaignId, name, NpcNotesDraft, creating ? null : NpcNameDraft, createOnly: creating, npcId: creating ? PendingNpcId : null, portraitExtension: creating ? PendingNpcPortraitExtension : null, portrayalCue: NpcPortrayalCueDraft);
+        if (!response.StartsWith("NPC card saved:", StringComparison.Ordinal)) { NpcEditorStatus = response; return; }
+        var saved = State.FindNpc(State.ActiveCampaignId, NpcNameDraft);
+        EditingNpc = saved;
+        CreatingNpc = false;
+        PendingNpcId = Guid.Empty; PendingNpcCampaignId = Guid.Empty; PendingNpcPortraitExtension = null;
+        NpcNameDraft = saved?.Name ?? NpcNameDraft.Trim();
+        NpcNotesDraft = saved?.Notes ?? NpcNotesDraft;
+        NpcPortrayalCueDraft = saved?.PortrayalCue ?? NpcPortrayalCueDraft;
+        EditingNpcPortraitUrl = saved is null ? null : PortraitStore.ReadDataUrl(State.ActiveCampaignId, saved.Id, saved.PortraitExtension);
+        NpcPortraitFrame = saved is null ? new() : PortraitStore.ReadFrame(State.ActiveCampaignId, saved.Id, saved.PortraitExtension);
+        NpcPortraitPositioning = false;
+        NpcEditorStatus = "Saved on this device.";
+    }
+    private string NpcInitial(string name) => string.IsNullOrWhiteSpace(name) ? "?" : name.Trim()[0].ToString().ToUpperInvariant();
+    private void ChooseNpcPortrait()
+    {
+        if (!CreatingNpc && EditingNpc is null) return;
+        var npcId = CreatingNpc ? PendingNpcId : EditingNpc!.Id;
+        using var dialog = new System.Windows.Forms.OpenFileDialog { Title = "Choose an NPC portrait", Filter = "Image files (*.png;*.jpg;*.jpeg;*.webp)|*.png;*.jpg;*.jpeg;*.webp|PNG image (*.png)|*.png|JPEG image (*.jpg;*.jpeg)|*.jpg;*.jpeg|WebP image (*.webp)|*.webp", CheckFileExists = true, Multiselect = false };
+        if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        try
+        {
+            var extension = CreatingNpc
+                ? PortraitStore.Save(State.ActiveCampaignId, npcId, dialog.FileName)
+                : PortraitStore.ReplaceNpcPortrait(State.ActiveCampaignId, npcId, dialog.FileName, value => State.SetNpcPortraitExtension(State.ActiveCampaignId, npcId, value));
+            if (CreatingNpc) PendingNpcPortraitExtension = extension;
+            EditingNpcPortraitUrl = PortraitStore.ReadDataUrl(State.ActiveCampaignId, npcId, extension);
+            NpcPortraitFrame = PortraitStore.ReadFrame(State.ActiveCampaignId, npcId, extension);
+            NpcPortraitPositioning = false;
+            NpcEditorStatus = "Portrait saved on this device.";
+        }
+        catch (Exception ex) { NpcEditorStatus = "Could not save portrait: " + ex.Message; }
+    }
+    private const long MaxPortraitUploadBytes = 20L * 1024 * 1024;
+    private async Task UploadNpcPortrait(InputFileChangeEventArgs args)
+    {
+        if (!MobileHost || (!CreatingNpc && EditingNpc is null)) return;
+        var file = args.File;
+        try
+        {
+            if (file.Size is <= 0 or > MaxPortraitUploadBytes) throw new InvalidDataException("Choose an image smaller than 20 MB.");
+            var npcId = CreatingNpc ? PendingNpcId : EditingNpc!.Id;
+            await using var stream = file.OpenReadStream(MaxPortraitUploadBytes);
+            var extension = CreatingNpc
+                ? await PortraitStore.SaveAsync(State.ActiveCampaignId, npcId, file.Name, stream)
+                : await PortraitStore.ReplaceNpcPortraitAsync(State.ActiveCampaignId, npcId, file.Name, stream, value => State.SetNpcPortraitExtension(State.ActiveCampaignId, npcId, value));
+            if (CreatingNpc) PendingNpcPortraitExtension = extension;
+            EditingNpcPortraitUrl = PortraitStore.ReadDataUrl(State.ActiveCampaignId, npcId, extension);
+            NpcPortraitFrame = PortraitStore.ReadFrame(State.ActiveCampaignId, npcId, extension);
+            NpcPortraitPositioning = false;
+            NpcEditorStatus = "Portrait saved on this device.";
+        }
+        catch (Exception ex) { NpcEditorStatus = "Could not save portrait: " + ex.Message; }
+    }
+    private void RemoveNpcPortrait()
+    {
+        if (!CreatingNpc && EditingNpc is null) return;
+        try
+        {
+            var npcId = CreatingNpc ? PendingNpcId : EditingNpc!.Id;
+            PortraitStore.DeletePortrait(State.ActiveCampaignId, npcId);
+            if (CreatingNpc) PendingNpcPortraitExtension = null;
+            else { EditingNpc!.PortraitExtension = null; State.SaveSettings(); }
+            EditingNpcPortraitUrl = null;
+            NpcPortraitFrame = new();
+            NpcPortraitPositioning = false;
+            NpcEditorStatus = "Portrait removed.";
+        }
+        catch (Exception ex) { NpcEditorStatus = "Could not remove portrait: " + ex.Message; }
+    }
+    private void OpenPortraitViewer() { if (!string.IsNullOrWhiteSpace(EditingNpcPortraitUrl)) ShowPortraitViewer = true; }
+    private void ClosePortraitViewer() => ShowPortraitViewer = false;
+    private void ToggleNpcPortraitPosition() => NpcPortraitPositioning = !NpcPortraitPositioning;
+    private void ChangeNpcPortraitZoom(ChangeEventArgs args)
+    {
+        if (double.TryParse(args.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var zoom))
+        {
+            NpcPortraitFrame = NpcPortraitFrame with { Zoom = Math.Clamp(zoom, 1, 8) };
+            SaveNpcPortraitFrame();
+        }
+    }
+    private void SaveNpcPortraitFrame()
+    {
+        if (CreatingNpc) PortraitStore.SaveFrame(PendingNpcCampaignId, PendingNpcId, PendingNpcPortraitExtension, NpcPortraitFrame);
+        else if (EditingNpc is { } npc) PortraitStore.SaveFrame(State.ActiveCampaignId, npc.Id, npc.PortraitExtension, NpcPortraitFrame);
+    }
+    private void AskDeleteNpc() { if (EditingNpc is not null) NpcPendingDelete = EditingNpc; }
+    private void CancelDeleteNpc() => NpcPendingDelete = null;
+    private void DeleteNpcCard()
+    {
+        if (NpcPendingDelete is not { } npc) return;
+        try
+        {
+            PortraitStore.DeletePortrait(State.ActiveCampaignId, npc.Id);
+            State.DeleteNpc(State.ActiveCampaignId, npc.Id);
+            NpcPendingDelete = null;
+            CloseNpcEditor();
+        }
+        catch (Exception ex) { NpcEditorStatus = "Could not delete this NPC: " + ex.Message; NpcPendingDelete = null; }
+    }
+    private void OpenBestiary(BestiaryEntry entry)
+    {
+        ActiveBestiary = entry; CreatingBestiary = false; EditingBestiaryContent = false;
+        BestiaryNameDraft = entry.Name; BestiaryStatBlockDraft = entry.StatBlock; BestiaryNotesDraft = entry.Notes;
+        BestiaryPortraitExtensionDraft = entry.PortraitExtension;
+        BestiaryPortraitUrl = PortraitStore.ReadBestiaryDataUrl(State.ActiveCampaignId, entry.Id, entry.PortraitExtension);
+        BestiaryPortraitFrame = PortraitStore.ReadBestiaryFrame(State.ActiveCampaignId, entry.Id, entry.PortraitExtension);
+        BestiaryPositioning = false; BestiaryEditorStatus = ""; ShowBestiaryPortraitViewer = false;
+    }
+    private void BeginCreateBestiary()
+    {
+        CloseBestiaryDetail();
+        CreatingBestiary = true; EditingBestiaryContent = true; PendingBestiaryId = Guid.NewGuid(); PendingBestiaryCampaignId = State.ActiveCampaignId;
+        BestiaryNameDraft = ""; BestiaryStatBlockDraft = ""; BestiaryNotesDraft = ""; BestiaryPortraitExtensionDraft = null;
+        BestiaryPortraitUrl = null; BestiaryPortraitFrame = new(); BestiaryPositioning = false; BestiaryEditorStatus = "";
+    }
+    private void BeginEditBestiary()
+    {
+        if (ActiveBestiary is not { } entry) return;
+        CreatingBestiary = false; EditingBestiaryContent = true;
+        BestiaryNameDraft = entry.Name; BestiaryStatBlockDraft = entry.StatBlock; BestiaryNotesDraft = entry.Notes;
+        BestiaryPortraitExtensionDraft = entry.PortraitExtension; BestiaryEditorStatus = "";
+    }
+    private void CloseBestiaryEditor()
+    {
+        if (CreatingBestiary && PendingBestiaryId != Guid.Empty) PortraitStore.DeleteBestiaryPortrait(PendingBestiaryCampaignId, PendingBestiaryId);
+        CreatingBestiary = false; EditingBestiaryContent = false; PendingBestiaryId = Guid.Empty; PendingBestiaryCampaignId = Guid.Empty;
+        BestiaryPositioning = false; ShowBestiaryPortraitViewer = false;
+        if (ActiveBestiary is { } entry) OpenBestiary(entry);
+        else { BestiaryPortraitUrl = null; BestiaryPortraitFrame = new(); BestiaryPortraitExtensionDraft = null; }
+    }
+    private void CloseBestiaryDetail()
+    {
+        if (CreatingBestiary && PendingBestiaryId != Guid.Empty) PortraitStore.DeleteBestiaryPortrait(PendingBestiaryCampaignId, PendingBestiaryId);
+        ActiveBestiary = null; CreatingBestiary = false; EditingBestiaryContent = false; PendingBestiaryId = Guid.Empty; PendingBestiaryCampaignId = Guid.Empty;
+        BestiaryPortraitUrl = null; BestiaryPortraitExtensionDraft = null; BestiaryPortraitFrame = new(); BestiaryPositioning = false; ShowBestiaryPortraitViewer = false; BestiaryEditorStatus = "";
+    }
+    private void SaveBestiaryEditor()
+    {
+        var id = CreatingBestiary ? (Guid?)PendingBestiaryId : ActiveBestiary?.Id;
+        var campaignId = CreatingBestiary ? PendingBestiaryCampaignId : State.ActiveCampaignId;
+        var result = State.SaveManualBestiaryEntry(campaignId, id, BestiaryNameDraft, BestiaryStatBlockDraft, BestiaryNotesDraft, BestiaryPortraitExtensionDraft);
+        if (!result.StartsWith("Bestiary entry saved:", StringComparison.Ordinal)) { BestiaryEditorStatus = result; return; }
+        var name = BestiaryNameDraft.Trim();
+        CreatingBestiary = false; EditingBestiaryContent = false; PendingBestiaryId = Guid.Empty; PendingBestiaryCampaignId = Guid.Empty;
+        ActiveBestiary = State.FindBestiaryEntry(campaignId, name);
+        if (ActiveBestiary is { } saved) OpenBestiary(saved);
+        BestiaryEditorStatus = "Saved on this device.";
+    }
+    private void ChooseBestiaryPortrait()
+    {
+        if (!CreatingBestiary && ActiveBestiary is null) return;
+        var id = CreatingBestiary ? PendingBestiaryId : ActiveBestiary!.Id;
+        using var dialog = new System.Windows.Forms.OpenFileDialog { Title = "Choose a Bestiary portrait", Filter = "Image files (*.png;*.jpg;*.jpeg;*.webp)|*.png;*.jpg;*.jpeg;*.webp|PNG image (*.png)|*.png|JPEG image (*.jpg;*.jpeg)|*.jpg;*.jpeg|WebP image (*.webp)|*.webp", CheckFileExists = true, Multiselect = false };
+        if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        try
+        {
+            var campaignId = CreatingBestiary ? PendingBestiaryCampaignId : State.ActiveCampaignId;
+            BestiaryPortraitExtensionDraft = PortraitStore.SaveBestiaryPortrait(campaignId, id, dialog.FileName);
+            if (!CreatingBestiary) State.SetBestiaryPortraitExtension(State.ActiveCampaignId, id, BestiaryPortraitExtensionDraft);
+            BestiaryPortraitUrl = PortraitStore.ReadBestiaryDataUrl(campaignId, id, BestiaryPortraitExtensionDraft);
+            BestiaryPortraitFrame = PortraitStore.ReadBestiaryFrame(campaignId, id, BestiaryPortraitExtensionDraft);
+            BestiaryPositioning = false; BestiaryEditorStatus = "Portrait saved on this device.";
+        }
+        catch (Exception ex) { BestiaryEditorStatus = "Could not save portrait: " + ex.Message; }
+    }
+    private async Task UploadBestiaryPortrait(InputFileChangeEventArgs args)
+    {
+        if (!MobileHost || (!CreatingBestiary && ActiveBestiary is null)) return;
+        var file = args.File;
+        try
+        {
+            if (file.Size is <= 0 or > MaxPortraitUploadBytes) throw new InvalidDataException("Choose an image smaller than 20 MB.");
+            var id = CreatingBestiary ? PendingBestiaryId : ActiveBestiary!.Id;
+            var campaignId = CreatingBestiary ? PendingBestiaryCampaignId : State.ActiveCampaignId;
+            await using var stream = file.OpenReadStream(MaxPortraitUploadBytes);
+            BestiaryPortraitExtensionDraft = await PortraitStore.SaveBestiaryPortraitAsync(campaignId, id, file.Name, stream);
+            if (!CreatingBestiary) State.SetBestiaryPortraitExtension(State.ActiveCampaignId, id, BestiaryPortraitExtensionDraft);
+            BestiaryPortraitUrl = PortraitStore.ReadBestiaryDataUrl(campaignId, id, BestiaryPortraitExtensionDraft);
+            BestiaryPortraitFrame = PortraitStore.ReadBestiaryFrame(campaignId, id, BestiaryPortraitExtensionDraft);
+            BestiaryPositioning = false;
+            BestiaryEditorStatus = "Portrait saved on this device.";
+        }
+        catch (Exception ex) { BestiaryEditorStatus = "Could not save portrait: " + ex.Message; }
+    }
+    private void RemoveBestiaryPortrait()
+    {
+        if (!CreatingBestiary && ActiveBestiary is null) return;
+        var id = CreatingBestiary ? PendingBestiaryId : ActiveBestiary!.Id;
+        var campaignId = CreatingBestiary ? PendingBestiaryCampaignId : State.ActiveCampaignId;
+        PortraitStore.DeleteBestiaryPortrait(campaignId, id);
+        BestiaryPortraitExtensionDraft = null;
+        if (!CreatingBestiary) State.SetBestiaryPortraitExtension(State.ActiveCampaignId, id, null);
+        BestiaryPortraitUrl = null; BestiaryPortraitFrame = new(); BestiaryPositioning = false; BestiaryEditorStatus = "Portrait removed.";
+    }
+    private void ToggleBestiaryPortraitPosition() => BestiaryPositioning = !BestiaryPositioning;
+    private void ChangeBestiaryPortraitZoom(ChangeEventArgs args)
+    {
+        if (double.TryParse(args.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var zoom))
+        {
+            BestiaryPortraitFrame = BestiaryPortraitFrame with { Zoom = Math.Clamp(zoom, 1, 8) };
+            SaveBestiaryPortraitFrame();
+        }
+    }
+    private void SaveBestiaryPortraitFrame()
+    {
+        var id = CreatingBestiary ? PendingBestiaryId : ActiveBestiary?.Id ?? Guid.Empty;
+        if (id != Guid.Empty) PortraitStore.SaveBestiaryFrame(CreatingBestiary ? PendingBestiaryCampaignId : State.ActiveCampaignId, id, BestiaryPortraitExtensionDraft, BestiaryPortraitFrame);
+    }
+    private void OpenBestiaryPortraitViewer() { if (!string.IsNullOrWhiteSpace(BestiaryPortraitUrl)) ShowBestiaryPortraitViewer = true; }
+    private void CloseBestiaryPortraitViewer() => ShowBestiaryPortraitViewer = false;
+    private void IncrementSelectedBestiary()
+    {
+        if (ActiveBestiary is not { } entry) return;
+        BestiaryEditorStatus = State.UpdateBestiarySlain(State.ActiveCampaignId, entry.Name, "increment", 1);
+    }
+    private void DecrementSelectedBestiary()
+    {
+        if (ActiveBestiary is not { Slain: > 0 } entry) return;
+        BestiaryEditorStatus = State.UpdateBestiarySlain(State.ActiveCampaignId, entry.Name, "decrement", 1);
+    }
+    private void AskDeleteBestiary() { if (ActiveBestiary is not null) BestiaryPendingDelete = ActiveBestiary; }
+    private void CancelDeleteBestiary() => BestiaryPendingDelete = null;
+    private void DeleteBestiaryCard()
+    {
+        if (BestiaryPendingDelete is not { } entry) return;
+        PortraitStore.DeleteBestiaryPortrait(State.ActiveCampaignId, entry.Id);
+        State.DeleteBestiaryEntry(State.ActiveCampaignId, entry.Id);
+        BestiaryPendingDelete = null; CloseBestiaryDetail();
+    }
+    [JSInvokable]
+    public async Task NpcPortraitFrameChanged(double x, double y)
+    {
+        if (BestiaryPositioning)
+        {
+            BestiaryPortraitFrame = BestiaryPortraitFrame with { X = x, Y = y };
+            SaveBestiaryPortraitFrame();
+        }
+        else
+        {
+            NpcPortraitFrame = NpcPortraitFrame with { X = x, Y = y };
+            SaveNpcPortraitFrame();
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+    private void CancelBestiaryReview()
+    {
+        if (BestiaryProposalApplying) return;
+        State.CancelBestiaryProposal(); BestiaryProposalError = "";
+    }
+    private void CancelGmNoteReview() { GmNoteProposalError = ""; State.CancelGmNoteProposal(); }
+    private void ApproveGmNoteReview(PendingGmNoteProposal pending)
+    {
+        try { State.ApproveGmNoteProposal(pending); GmNoteProposalError = ""; }
+        catch (Exception ex) { GmNoteProposalError = "The proposed note was not saved. " + ex.Message; }
+    }
+    private async Task ApproveBestiaryReview(PendingBestiaryChange pending)
+    {
+        if (!ReferenceEquals(State.PendingBestiaryProposal, pending)) return;
+        BestiaryProposalApplying = true; BestiaryProposalError = "";
+        await InvokeAsync(StateHasChanged); await Task.Yield();
+        try { State.ApproveBestiaryProposal(pending); }
+        catch (Exception ex) { BestiaryProposalError = "The existing Bestiary was left unchanged. DBLC could not apply this proposal: " + ex.Message; }
+        finally { BestiaryProposalApplying = false; await InvokeAsync(StateHasChanged); }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _chronicleSessionKey = State.Current?.Id;
+        _observedBusy = State.Busy ? 1 : 0;
+        if (State.Busy) _responseActivePending = 1;
+        State.Changed += StateChanged;
+        MobileWeb.Changed += OnMobileWebChanged;
+        Paper.Changed += PaperChanged;
+        PlayerMarkDraft = State.PlayerMark;
+        NpcUiCampaignId = State.ActiveCampaignId;
+        LoadCatalogue();
+        PaperWindows.Docked += OnPaperDocked;
+        ViewOrder = ViewStore.Load();
+        await RefreshModelId();
+        await RefreshContextMeterAsync();
+    }
+    private int _stateRefreshQueued;
+    private bool _disposed;
+    private void StateChanged()
+    {
+        if (_disposed) return;
+        var busy = State.Busy ? 1 : 0;
+        if (System.Threading.Interlocked.Exchange(ref _observedBusy, busy) != busy)
+            System.Threading.Interlocked.Exchange(ref _responseActivePending, busy);
+        if (System.Threading.Interlocked.Exchange(ref _stateRefreshQueued, 1) != 0) return;
+        _ = InvokeAsync(async () =>
+        {
+            // Preserve every state change; render the latest state once per display frame.
+            await Task.Delay(16);
+            System.Threading.Interlocked.Exchange(ref _stateRefreshQueued, 0);
+            if (_disposed) return;
+            if (_chronicleSessionKey != State.Current?.Id)
+            {
+                _chronicleSessionKey = State.Current?.Id;
+                if (State.Current?.IsWorkbench == true) CaptureWorkbenchPaperBaseline();
+                _chronicleNavigationPending = true;
+                _chronicleResetToLatestPending = true;
+                ChronicleNeedsInitialPosition = true;
+            }
+            RefreshStateView();
+            UpdateGenericActivityRotation();
+            StateHasChanged();
+        });
+    }
+    private void RefreshStateView()
+    {
+        if (NpcUiCampaignId != State.ActiveCampaignId)
+        {
+            CloseNpcEditor();
+            CloseBestiaryEditor();
+            CloseBestiaryDetail();
+            NpcUiCampaignId = State.ActiveCampaignId;
+            NpcPendingDelete = null; NpcSearch = ""; BestiarySearch = ""; BestiaryPendingDelete = null;
+        }
+    }
+    private void CaptureWorkbenchPaperBaseline()
+    {
+        _workbenchPlayerBaseline = Paper.PlayerMarkdown;
+        _workbenchWorkspaceBaseline = Paper.Notes;
+        _workbenchPaperCampaignId = Paper.CampaignId;
+    }
+    private void PaperChanged()
+    {
+        if (State.Current is not { IsWorkbench: true } workbench || Paper.CampaignId != workbench.CampaignId) return;
+        if (_workbenchPaperCampaignId != Paper.CampaignId)
+        {
+            CaptureWorkbenchPaperBaseline();
+            return;
+        }
+        if (!string.Equals(_workbenchPlayerBaseline, Paper.PlayerMarkdown, StringComparison.Ordinal))
+        {
+            _workbenchPlayerBaseline = Paper.PlayerMarkdown;
+            State.RecordWorkbenchArtifact("Player Sheet updated");
+        }
+        if (!string.Equals(_workbenchWorkspaceBaseline, Paper.Notes, StringComparison.Ordinal))
+        {
+            _workbenchWorkspaceBaseline = Paper.Notes;
+            State.RecordWorkbenchArtifact("Workspace Notes updated");
+        }
+    }
+    private string ActivityStatus => PlayerUpdateApplying ? "Updating Player Sheet…" :
+        State.Busy && State.Status == GenericWaitingStatus ? GenericActivityText : State.Status;
+    private void ToggleMobileAccess(ChangeEventArgs args)
+    {
+        try { State.SetMobileRemoteAccessEnabled(args.Value is bool enabled && enabled); MobileAccessError = ""; }
+        catch (Exception ex) { MobileAccessError = ex.Message; }
+    }
+    private void GenerateMobileAccessCode()
+    {
+        try { State.GenerateMobileAccessCode(); MobileAccessError = ""; }
+        catch (Exception ex) { MobileAccessError = "Could not create an access code: " + ex.Message; }
+    }
+    private void OnMobileWebChanged() => _ = InvokeAsync(StateHasChanged);
+    private void UpdateGenericActivityRotation()
+    {
+        var waiting = State.Busy && State.Status == GenericWaitingStatus;
+        if (waiting && _genericActivityRotation is null)
+        {
+            var rotation = new CancellationTokenSource();
+            _genericActivityRotation = rotation;
+            _ = RotateGenericActivityAsync(rotation);
+        }
+        else if (!waiting && _genericActivityRotation is { } rotation)
+        {
+            _genericActivityRotation = null;
+            rotation.Cancel();
+        }
+    }
+    private async Task RotateGenericActivityAsync(CancellationTokenSource rotation)
+    {
+        try
+        {
+            while (!rotation.IsCancellationRequested && State.Busy && State.Status == GenericWaitingStatus)
+            {
+                GenericActivityText = ActivityCatalog.PickActivity();
+                StateHasChanged();
+                await Task.Delay(Random.Shared.Next(4000, 6001), rotation.Token);
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            if (ReferenceEquals(_genericActivityRotation, rotation)) _genericActivityRotation = null;
+            rotation.Dispose();
+        }
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try { await JS.InvokeVoidAsync("installComposerEnter"); } catch { }
+            try { await JS.InvokeVoidAsync("installCleanGlitchCopy"); } catch { }
+            try { await JS.InvokeVoidAsync("installChronicleCopyMenu"); } catch { }
+            _sessionReorderReference = DotNetObjectReference.Create(this);
+            try { await JS.InvokeVoidAsync("enableSessionReorder", _sessionReorderReference); } catch { }
+        }
+        if (!MobileHost && ActiveView == "Table" && _chronicleNavigationPending && State.Current is { } chronicleSession)
+        {
+            _chronicleNavigationPending = false;
+            var resetToLatest = _chronicleResetToLatestPending;
+            _chronicleResetToLatestPending = false;
+            try
+            {
+                await JS.InvokeVoidAsync("installChronicleNavigation", MessagesElement, ChronicleJumpButtonElement, _sessionReorderReference, chronicleSession.Id.ToString("N"), resetToLatest);
+                ChronicleNeedsInitialPosition = false;
+            }
+            catch
+            {
+                // Fall back to showing the saved Chronicle even if scroll interop fails.
+                // A later Session/view switch will retry installation.
+                _chronicleNavigationPending = false;
+                ChronicleNeedsInitialPosition = false;
+            }
+            await InvokeAsync(StateHasChanged);
+        }
+        if (!MobileHost && ActiveView == "Table" && !_chronicleNavigationPending)
+            await ApplyChronicleResponseStateAsync();
+        if (!MobileHost && _composerImageInstallPending && ActiveView == "Table")
+        {
+            _composerImageReference ??= DotNetObjectReference.Create(this);
+            try { await JS.InvokeVoidAsync("installComposerImageAttachments", ComposerFormElement, _composerImageReference); } catch { }
+            _composerImageInstallPending = false;
+        }
+        if (NpcPortraitPositioning && !string.IsNullOrWhiteSpace(EditingNpcPortraitUrl))
+        {
+            _npcPortraitPositionReference ??= DotNetObjectReference.Create(this);
+            try { await JS.InvokeVoidAsync("npcPortraitPositioner.initialize", NpcPortraitPositionFrameElement, _npcPortraitPositionReference); } catch { }
+        }
+        else if (BestiaryPositioning && !string.IsNullOrWhiteSpace(BestiaryPortraitUrl))
+        {
+            _npcPortraitPositionReference ??= DotNetObjectReference.Create(this);
+            try { await JS.InvokeVoidAsync("npcPortraitPositioner.initialize", BestiaryPortraitPositionFrameElement, _npcPortraitPositionReference); } catch { }
+        }
+    }
+    [JSInvokable] public void ReorderSessionFromDrag(string draggedId, string targetId, bool placeAfter)
+    {
+        if (Guid.TryParse(draggedId, out var source) && Guid.TryParse(targetId, out var target)) State.ReorderSession(source, target, placeAfter);
+    }
+    private int ContextPercent => State.Current?.LastContextTokens is { } used && (State.Current.ContextTokenLimit ?? ServerContextLimit) is { } limit and > 0 ? (int)Math.Clamp(Math.Round(used * 100d / limit), 0, 100) : 0;
+    private int ContextDisplayPercent => State.Current?.LastContextTokens is { } used && (State.Current.ContextTokenLimit ?? ServerContextLimit) is { } limit and > 0 ? (int)Math.Clamp(Math.Round(used * 100d / limit), 0, 999) : 0;
+    private string ContextFillWidth => State.Current?.LastContextTokens is not null && (State.Current.ContextTokenLimit ?? ServerContextLimit) is > 0 ? $"{ContextPercent}%" : "0%";
+    private string ContextTooltip => State.Current?.LastContextTokens is { } used && (State.Current.ContextTokenLimit ?? ServerContextLimit) is { } limit and > 0 ? $"{used:N0} / {limit:N0} tokens · {ContextDisplayPercent}%" : "Context usage will appear when llama.cpp reports token counts.";
+    private void SelectConversation(Conversation conversation)
+    {
+        ChronicleNeedsInitialPosition = true;
+        _chronicleNavigationPending = true;
+        _chronicleResetToLatestPending = true;
+        State.Select(conversation);
+        if (conversation.IsWorkbench) CaptureWorkbenchPaperBaseline();
+        SessionActionStatus = "";
+        WorkbenchExitError = "";
+        if (conversation.IsWorkbench || State.Current?.IsWorkbench == false) ActiveView = "Table";
+        _ = RefreshContextMeterAsync();
+    }
+    private void OpenWorkbenchCreate() { WorkbenchNameDraft = ""; ShowWorkbenchCreate = true; }
+    private void CloseWorkbenchCreate() => ShowWorkbenchCreate = false;
+    private void CreateWorkbench()
+    {
+        if (CurrentParentSession is not { IsEnded: false } parent || string.IsNullOrWhiteSpace(WorkbenchNameDraft)) return;
+        var created = State.CreateWorkbench(parent.Id, WorkbenchNameDraft);
+        if (created is null) return;
+        CaptureWorkbenchPaperBaseline();
+        ShowWorkbenchCreate = false;
+        WorkbenchExitError = "";
+        ActiveView = "Table";
+        _ = RefreshContextMeterAsync();
+    }
+    private void DiscardWorkbenchNow()
+    {
+        if (State.Busy || State.WorkbenchExitReviewBusy || State.Current is not { IsWorkbench: true } workbench) return;
+        try
+        {
+            var parent = State.EndWorkbench(workbench.Id, [], []);
+            if (parent is null) { WorkbenchExitError = "The parent Session is unavailable; the Workbench was kept."; return; }
+            ActiveView = "Table";
+            WorkbenchExitError = "Workbench discarded. No GM Notes or Chronicle facts were saved.";
+            SessionActionStatus = "Workbench discarded and closed.";
+        }
+        catch (Exception ex) { WorkbenchExitError = "DBLC could not discard the Workbench. It remains open. " + ex.Message; }
+    }
+    private void DiscardWorkbenchFromReview(PendingWorkbenchExitReview expected) => State.ResolveWorkbenchExitReview(WorkbenchExitReviewAction.Discard, expected);
+    private async Task RequestEndWorkbench()
+    {
+        if (SessionActionBusy || ResolvingModel || State.Busy || State.WorkbenchExitReviewBusy || State.Current?.IsWorkbench != true) return;
+        WorkbenchExitError = "";
+        await SendPrompt("", fromComposer: false, internalInstruction: "[DBLC: The player requested Review & End. Review the Workbench and use request_end_workbench.]");
+    }
+    private void CancelWorkbenchExit(PendingWorkbenchExitReview expected) => State.ResolveWorkbenchExitReview(WorkbenchExitReviewAction.Cancel, expected);
+    private void ConfirmEndWorkbench(PendingWorkbenchExitReview expected) => State.ResolveWorkbenchExitReview(WorkbenchExitReviewAction.Approve, expected);
+    private async Task ExportGmNotesJson() => await ExportGmNotes(false);
+    private async Task ExportGmNotesMarkdown() => await ExportGmNotes(true);
+    private async Task ExportGmNotes(bool markdown)
+    {
+        if (State.ActiveCampaign is not { } campaign) return;
+        var notes = State.GetGmNotes(campaign.Id);
+        var extension = markdown ? "md" : "json";
+        var content = markdown ? GmNoteTransfer.ExportMarkdown(notes) : GmNoteTransfer.ExportJson(notes);
+        await JS.InvokeVoidAsync("downloadTextFile", $"{SafeFileName(campaign.Name)}-gm-notes.{extension}", content,
+            markdown ? "text/markdown;charset=utf-8" : "application/json;charset=utf-8");
+        GmNoteTransferStatus = $"Exported {notes.Count} GM Notes.";
+    }
+    private async Task LoadGmNoteImport(InputFileChangeEventArgs args)
+    {
+        CancelGmNoteImport();
+        if (State.ActiveCampaign is not { } campaign) return;
+        try
+        {
+            if (args.File.Size > GmNoteTransfer.MaxImportBytes) throw new InvalidDataException("The import file is too large.");
+            await using var stream = args.File.OpenReadStream(GmNoteTransfer.MaxImportBytes);
+            using var reader = new StreamReader(stream);
+            GmNoteImportJson = await reader.ReadToEndAsync();
+            GmNoteImportFileName = args.File.Name;
+            GmNoteImportPlan = State.PreviewGmNoteImport(campaign.Id, GmNoteImportJson, false);
+            GmNoteTransferStatus = "Review the counts below, then confirm before anything is saved.";
+        }
+        catch (Exception ex)
+        {
+            CancelGmNoteImport();
+            GmNoteTransferStatus = $"Import rejected: {ex.Message}";
+        }
+    }
+    private void RefreshGmNoteImportPreview()
+    {
+        if (GmNoteImportJson is null || State.ActiveCampaign is not { } campaign) return;
+        try { GmNoteImportPlan = State.PreviewGmNoteImport(campaign.Id, GmNoteImportJson, GmNoteImportAllowUpdates); }
+        catch (Exception ex)
+        { CancelGmNoteImport(); GmNoteTransferStatus = $"Import rejected: {ex.Message}"; }
+    }
+    private void ConfirmGmNoteImport()
+    {
+        if (GmNoteImportPlan is not { } plan) return;
+        try
+        {
+            State.ApplyGmNoteImport(plan);
+            GmNoteTransferStatus = $"Imported {plan.CreatedCount} new notes and updated {plan.UpdatedCount}; skipped {plan.Skipped}, rejected {plan.Rejected}.";
+            CancelGmNoteImport(false);
+        }
+        catch (Exception ex)
+        { GmNoteTransferStatus = $"Nothing was imported: {ex.Message}"; }
+    }
+    private void CancelGmNoteImport(bool clearStatus = true)
+    {
+        GmNoteImportJson = null;
+        GmNoteImportPlan = null;
+        GmNoteImportFileName = "";
+        GmNoteImportAllowUpdates = false;
+        if (clearStatus) GmNoteTransferStatus = "";
+    }
+    private void AddManualGmNote()
+    {
+        if (string.IsNullOrWhiteSpace(NewGmNoteDraft)) return;
+        State.AddGmNote(State.ActiveCampaignId, NewGmNoteDraft);
+        NewGmNoteDraft = "";
+    }
+    private bool IsSummaryStale(Conversation session) => !string.IsNullOrWhiteSpace(session.SessionSummary) && session.SessionSummarySequence < session.NextSequence - 1;
+
+    private void ShowSessionSummary(Conversation session, MouseEventArgs e)
+    {
+        CancelHideSessionSummary();
+        if (string.IsNullOrWhiteSpace(session.SessionSummary)) return;
+        HoveredSession = session;
+        HoverX = e.ClientX + 12;
+        HoverY = e.ClientY + 12;
+    }
+    private void CancelHideSessionSummary() { _hoverHide?.Cancel(); _hoverHide = null; }
+    private void ScheduleHideSessionSummary()
+    {
+        var hide = new CancellationTokenSource();
+        var previous = _hoverHide;
+        _hoverHide = hide;
+        previous?.Cancel();
+        _ = HideSessionSummaryAfterDelay(hide);
+    }
+    private async Task HideSessionSummaryAfterDelay(CancellationTokenSource hide)
+    {
+        try
+        {
+            await Task.Delay(250, hide.Token);
+            if (ReferenceEquals(_hoverHide, hide)) { HoveredSession = null; await InvokeAsync(StateHasChanged); }
+        }
+        catch (OperationCanceledException) { }
+        finally { if (ReferenceEquals(_hoverHide, hide)) _hoverHide = null; hide.Dispose(); }
+    }
+    private void OpenSessionMenu(Conversation session, MouseEventArgs e)
+    {
+        _hoverHide?.Cancel();
+        HoveredSession = null;
+        MenuSession = session;
+        MenuX = e.ClientX;
+        MenuY = e.ClientY;
+    }
+    private void CloseSessionMenu() => MenuSession = null;
+    private void BeginRenameSession()
+    {
+        if (MenuSession is null) return;
+        RenamingSession = MenuSession;
+        RenameDraft = MenuSession.Title;
+        MenuSession = null;
+    }
+    private void CloseRenameSession() => RenamingSession = null;
+    private void HandleRenameKey(KeyboardEventArgs e) { if (e.Key == "Enter") SaveSessionRename(); else if (e.Key == "Escape") CloseRenameSession(); }
+    private void SaveSessionRename()
+    {
+        if (RenamingSession is not { } session || string.IsNullOrWhiteSpace(RenameDraft)) return;
+        session.Title = RenameDraft.Trim();
+        session.UpdatedAt = DateTimeOffset.Now;
+        State.SaveSettings();
+        RenamingSession = null;
+    }
+    private void DuplicateSession()
+    {
+        if (MenuSession is not { } session) return;
+        var copy = State.Duplicate(session);
+        MenuSession = null;
+        SessionActionStatus = $"Session {copy.SessionNumber} duplicated.";
+        _ = RefreshContextMeterAsync();
+    }
+    private void ExportSession()
+    {
+        if (MenuSession is not { } session) return;
+        MenuSession = null;
+        using var dialog = new System.Windows.Forms.SaveFileDialog
+        {
+            Title = "Export session chronicle",
+            Filter = "Markdown document (*.md)|*.md",
+            FileName = $"Session {session.SessionNumber} - {SafeFileName(session.Title)}.md",
+            DefaultExt = "md",
+            AddExtension = true
+        };
+        if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        var lines = State.GetCompleteChronicleLines(session);
+        var output = new StringBuilder();
+        output.Append("# Session ").Append(session.SessionNumber ?? 1).Append(" — ").AppendLine(session.Title).AppendLine();
+        output.Append("Status: ").AppendLine(session.IsEnded ? "Ended" : "In progress");
+        output.Append("Last activity: ").AppendLine(session.UpdatedAt.ToLocalTime().ToString("g")).AppendLine();
+        if (!string.IsNullOrWhiteSpace(session.SessionSummary)) output.AppendLine("## Session summary").AppendLine().AppendLine(session.SessionSummary).AppendLine();
+        if (!string.IsNullOrWhiteSpace(session.OpeningSummary)) output.AppendLine("## Previous session recap").AppendLine().AppendLine(session.OpeningSummary).AppendLine();
+        output.AppendLine("## Chronicle").AppendLine();
+        foreach (var line in lines)
+        {
+            output.Append("### ").Append(line.EntryType == "campaign_record" ? "Campaign Record" : line.Role == "user" ? "Player" : "GM").Append(" · ").AppendLine(line.DisplayTimestamp.ToLocalTime().ToString("g"));
+            output.AppendLine();
+            if (line.RollSides is { } sides) output.Append("<!-- DBLC roll d").Append(sides).AppendLine(" -->");
+            output.AppendLine(line.Content).AppendLine();
+        }
+        try
+        {
+            File.WriteAllText(dialog.FileName, output.ToString(), new System.Text.UTF8Encoding(false));
+            SessionActionStatus = "Session exported.";
+        }
+        catch (Exception ex) { SessionActionStatus = "Could not export session: " + ex.Message; }
+    }
+    private static string SafeFileName(string name)
+    {
+        var invalid = System.IO.Path.GetInvalidFileNameChars().ToHashSet();
+        var safe = new string(name.Where(character => !invalid.Contains(character)).ToArray()).Trim();
+        return string.IsNullOrWhiteSpace(safe) ? "Session" : safe;
+    }
+    private void ConfirmDeleteSession() { DeletingSession = MenuSession; MenuSession = null; }
+    private void CancelDeleteSession() => DeletingSession = null;
+    private void DeleteSession()
+    {
+        if (DeletingSession is not { } session) return;
+        State.Delete(session);
+        DeletingSession = null;
+        SessionActionStatus = "Session deleted.";
+        _ = RefreshContextMeterAsync();
+    }
+    private async Task SummarizeCurrentSession() => await SummarizeSession(endAfterSummary: false);
+    private async Task EndCurrentSession() => await SummarizeSession(endAfterSummary: true);
+    private async Task SummarizeSession(bool endAfterSummary)
+    {
+        var session = State.Current;
+        if (SessionActionBusy || State.Busy || session is null || session.IsEnded) return;
+        SessionActionBusy = true;
+        EndingSession = endAfterSummary;
+        SessionActionStatus = endAfterSummary ? "Preparing final session recap…" : "Asking the GM for a recap…";
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var activeLines = session.Lines.Where(line => line.Role is "user" or "assistant").ToList();
+            string? summary;
+            if (activeLines.Count == 0 && string.IsNullOrWhiteSpace(session.ArchiveSummary))
+                summary = "No chronicle messages were recorded during this session.";
+            else if (endAfterSummary)
+                summary = await LlamaClient.TryGenerateSessionSummaryForEndAsync(async () =>
+                {
+                    await RefreshModelId();
+                    return await Client.SummarizeSessionAsync(State.Endpoint, ServerModelId ?? State.Model, activeLines, session.ArchiveSummary, session.OpeningSummary);
+                });
+            else
+            {
+                await RefreshModelId();
+                summary = await Client.SummarizeSessionAsync(State.Endpoint, ServerModelId ?? State.Model, activeLines, session.ArchiveSummary, session.OpeningSummary);
+            }
+            if (!string.IsNullOrWhiteSpace(summary)) State.SaveSessionSummary(session, summary);
+            else if (!endAfterSummary) throw new InvalidOperationException("The model returned an empty session summary.");
+            if (endAfterSummary)
+            {
+                State.EndSessionAndStartNext(session);
+                ActiveView = "Table";
+                SessionActionStatus = $"Session {session.SessionNumber} ended. Session {State.Current?.SessionNumber} is ready.";
+                await RefreshContextMeterAsync();
+            }
+            else SessionActionStatus = "Session summary saved. Hover over this session to read it.";
+        }
+        catch (Exception ex)
+        {
+            SessionActionStatus = "Could not summarize session: " + ex.Message;
+        }
+        finally
+        {
+            SessionActionBusy = false;
+            EndingSession = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task SetView(string view)
+    {
+        if (!MobileHost && view is ("Player" or "Workspace"))
+        {
+            if (PaperWindows.IsOpen(view)) { PaperWindows.OpenOrActivate(view); return; }
+            if (ActiveView == view)
+            {
+                PaperWindows.OpenOrActivate(view);
+                await SuspendChronicleNavigation();
+                ActiveView = "Table";
+                _chronicleNavigationPending = true;
+                ChronicleNeedsInitialPosition = false;
+                _composerImageInstallPending = true;
+                return;
+            }
+        }
+        if (ActiveView == "Table" && view != "Table") await SuspendChronicleNavigation();
+        ActiveView = view;
+        if (view == "Table")
+        {
+            _chronicleNavigationPending = true;
+            ChronicleNeedsInitialPosition = false;
+            _composerImageInstallPending = true;
+        }
+    }
+    private async Task SuspendChronicleNavigation()
+    {
+        try { await JS.InvokeVoidAsync("suspendChronicleNavigation", MessagesElement); } catch { }
+    }
+    private void OnPaperDocked(string view) => _ = InvokeAsync(StateHasChanged);
+    private void SetChronicleTextSize(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var percent)) State.SetChronicleTextSizePercent(percent);
+    }
+
+    private void MoveView(string view, int direction)
+    {
+        var index = ViewOrder.IndexOf(view); var target = index + direction;
+        if (index < 0 || target < 0 || target >= ViewOrder.Count) return;
+        (ViewOrder[index], ViewOrder[target]) = (ViewOrder[target], ViewOrder[index]);
+        ViewStore.Save(ViewOrder);
+    }
+    private async Task RefreshModelId()
+    {
+        var targetConversation = State.Current;
+        try { ServerModelId = await ModelInfo.GetModelIdAsync(State.Endpoint); }
+        catch { ServerModelId = null; }
+        try { ServerContextLimit = await ModelInfo.GetContextLimitAsync(State.Endpoint); }
+        catch { ServerContextLimit = null; }
+        if (targetConversation is not null) targetConversation.ContextTokenLimit = ServerContextLimit ?? targetConversation.ContextTokenLimit;
+    }
+    private async Task RefreshContextMeterAsync()
+    {
+        var conversation = State.Current;
+        if (conversation is null) return;
+        conversation.ContextTokenLimit = ServerContextLimit ?? conversation.ContextTokenLimit;
+        var model = ServerModelId ?? State.Model;
+        var hasModelMark = State.TryGetGmMark(model, out var currentMark);
+        var campaignTime = State.GetCampaignGmMoment(conversation.CampaignId);
+        var count = await Client.CountInputTokensAsync(State.Endpoint, model, State.GetContextHistory(conversation), conversation.ArchiveSummary, conversation.OpeningSummary, currentGmMark: currentMark, hasModelGmMark: hasModelMark, flavorFontsEnabled: State.GmFlavorFontsEnabled, gmProfile: State.GmProfile, campaignTime: campaignTime, allowCharacterSpeakers: State.CharacterSpeakersEnabled, isWorkbench: conversation.IsWorkbench, retainedWorkbenchArtifacts: conversation.WorkbenchRetainedArtifacts, streamAnimationsEnabled: State.GmStreamAnimationsEnabled, streamDefaultEffect: State.GmStreamDefaultEffect, allowInlineStreamEffects: State.GmInlineStreamEffectsEnabled);
+        if (count is { } tokens && State.Current?.Id == conversation.Id)
+        {
+            conversation.LastContextTokens = tokens;
+            State.Notify();
+        }
+    }
+    private void LoadCatalogue() => Catalogue = State.SelectedBook is { } book ? State.GetEntries(book.Id) : [];
+    private void SelectBook(string path)
+    {
+        State.SelectBook(path);
+        LoadCatalogue();
+    }
+    private long _lastSubmitTick;
+    private async Task SendForm()
+    {
+        var now = Environment.TickCount64;
+        if (now - _lastSubmitTick < 400) return;
+        _lastSubmitTick = now;
+        await SendPrompt(Draft.Trim(), fromComposer: true);
+    }
+    private async Task SendPrompt(string prompt, bool fromComposer, string? internalInstruction = null)
+    {
+        if (ResolvingModel || SessionActionBusy || State.Current?.IsEnded == true) return;
+        if (State.Busy)
+        {
+            if (!fromComposer) return;
+            if (prompt.Length == 0)
+            {
+                State.StopCurrentResponse();
+                return;
+            }
+            if (State.SteerCurrentResponse(prompt))
+            {
+                Draft = "";
+                try { await JS.InvokeVoidAsync("clearComposer", ComposerElement); } catch { }
+            }
+            else SessionActionStatus = "The active GM turn belongs to another Session or is finishing. Your draft was kept.";
+            return;
+        }
+        var sourceConversation = State.Current;
+        if (sourceConversation is null) return;
+        ComposerImageDraft? attachment = fromComposer && State.VisionEnabled ? ComposerImage : null;
+        SessionActionStatus = ""; ResolvingModel = true;
+        var diagnostics = new GmRequestDiagnostics();
+        var discovery = System.Diagnostics.Stopwatch.StartNew();
+        try { await RefreshModelId(); }
+        finally { ResolvingModel = false; }
+        diagnostics.RecordPreflight("model_id_and_context_discovery", discovery.Elapsed);
+        if (!State.VisionEnabled) { attachment = null; if (fromComposer) RemoveComposerImage(); }
+        string? imageKey = null;
+        LlamaVisionImage? visionImage = null;
+        if (attachment is not null && State.Current?.Id == sourceConversation.Id)
+        {
+            try
+            {
+                imageKey = ChronicleImages.Save(sourceConversation.CampaignId, sourceConversation.Id, attachment.Name, attachment.Bytes);
+                visionImage = new LlamaVisionImage(attachment.MimeType, $"data:{attachment.MimeType};base64,{Convert.ToBase64String(attachment.Bytes)}");
+            }
+            catch (Exception ex)
+            {
+                if (fromComposer) Draft = prompt;
+                ComposerImageError = "Could not save the attached image: " + ex.Message;
+                return;
+            }
+        }
+        try
+        {
+            async Task<string> RequestWorkbenchEndFromGm(WorkbenchExitRetention retention)
+            {
+                if (sourceConversation is not { IsWorkbench: true } workbench || State.Current?.Id != workbench.Id)
+                    return "The player is no longer in this Workbench. It was not ended.";
+                if (!State.TryBeginWorkbenchExitReview(workbench.Id, out var reservation))
+                    return "A Workbench exit review is already being prepared or reviewed. Do not request another one.";
+                try
+                {
+                    Paper.SaveAll();
+                    if (!State.PublishWorkbenchExitReview(reservation, retention, out var approval) || approval is null)
+                        return "DBLC could not open the shared Workbench exit review. The Workbench remains open.";
+                    return await approval;
+                }
+                catch (Exception ex)
+                {
+                    State.CancelWorkbenchExitReviewPreparation(reservation);
+                    return "DBLC could not open the Workbench exit review, so the Workbench remains open. " + ex.Message;
+                }
+            }
+            var accepted = false;
+            var sendTask = State.SendAsync(prompt, Client, ServerModelId, ServerContextLimit, Paper.ReadPlayerMarkdown, Paper.ReadWorkspaceNotes, diagnostics, visionImage, imageKey,
+                requestWorkbenchEnd: RequestWorkbenchEndFromGm, expectedConversationId: sourceConversation.Id,
+                onAccepted: () => { accepted = true; if (fromComposer) { Draft = ""; RemoveComposerImage(); } },
+                onRejected: reason => SessionActionStatus = reason, internalInstruction: internalInstruction);
+            if (accepted && fromComposer)
+                try { await JS.InvokeVoidAsync("clearComposer", ComposerElement); } catch { }
+            else if (imageKey is not null && !State.HasChronicleImageReference(sourceConversation.CampaignId, sourceConversation.Id, imageKey)) ChronicleImages.DeleteAsset(sourceConversation.CampaignId, sourceConversation.Id, imageKey);
+            await sendTask;
+        }
+        catch
+        {
+            if (imageKey is not null && !State.HasChronicleImageReference(sourceConversation.CampaignId, sourceConversation.Id, imageKey)) ChronicleImages.DeleteAsset(sourceConversation.CampaignId, sourceConversation.Id, imageKey);
+            throw;
+        }
+    }
+    private int SelectedDieSides = 20;
+    private async Task<bool> RecordPlayerRoll(DiceRollRequest roll)
+    {
+        if (DiceControlsDisabled || !State.RecordDiceRoll(roll.Sides, roll.Result, roll.Id, roll.ConversationId)) return false;
+        await ScrollToBottom();
+        return true;
+    }
+    private double TriggerShare(IReadOnlyCollection<CampaignTrigger> triggers, CampaignTrigger trigger)
+    {
+        var scale = triggers.Count > 0 ? triggers.Max(item => Math.Max(0, item.Weight)) : 0;
+        if (scale <= 0) return 0;
+        var total = triggers.Sum(item => Math.Max(0, item.Weight) / scale);
+        return Math.Max(0, trigger.Weight) / scale / total * 100;
+    }
+    private void CancelPlayerSheetUpdate()
+    {
+        if (PlayerUpdateApplying) return;
+        State.ResolvePlayerSheetUpdate("Player rejected the proposed Player Sheet update. The existing Player Sheet is unchanged.");
+        PlayerUpdateError = "";
+    }
+    private async Task ApprovePlayerSheetUpdate(PendingPlayerSheetUpdate pending)
+    {
+        if (!ReferenceEquals(State.PendingPlayerUpdate, pending)) return;
+        PlayerUpdateApplying = true;
+        await InvokeAsync(StateHasChanged);
+        await Task.Yield();
+        try
+        {
+            if (!State.Campaigns.Any(campaign => campaign.Id == pending.CampaignId)) throw new InvalidOperationException("The campaign that requested this update is no longer available.");
+            State.ApplyPlayerSheetUpdate(pending, () => Paper.ApplyApprovedPlayerUpdate(pending.CampaignId, pending.OriginalMarkdown, pending.UpdatedMarkdown));
+            PlayerUpdateError = "";
+        }
+        catch (Exception ex)
+        {
+            PlayerUpdateError = "The existing sheet was kept. DBLC could not save the update: " + ex.Message;
+        }
+        finally
+        {
+            PlayerUpdateApplying = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private void ResetSurpriseDefaults()
+    {
+        if (State.ActiveCampaign is not { } campaign) return;
+        campaign.SurpriseMachine.ResetMechanicalDefaults();
+        MachineSettingsError = "";
+        State.Notify();
+    }
+    private void OpenGmNoteReference(GmNoteReference reference)
+    {
+        if (!State.CanOpenGmNoteReference(reference)) return;
+        ActiveView = "Table";
+        SettingsSection = "CAMPAIGN";
+        GmNotesFocusedId = reference.NoteId;
+        ShowSettings = true;
+    }
+    private void OpenSourceReference(GmSourceReference reference)
+    {
+        if (!State.CanOpenSourceReference(reference)) return;
+        if (MobileHost && reference.Kind != "gm_note") return;
+        if (reference.Kind == "gm_note" && reference.CampaignId is { } campaignId && reference.NoteId is { } noteId)
+        {
+            OpenGmNoteReference(new GmNoteReference(campaignId, noteId, reference.Title));
+        }
+        else if (reference.Kind == "library" && reference.BookId is { } bookId && State.GetLibraryPdfPath(bookId) is { } path)
+        {
+            State.SelectBook(path);
+            var target = new Uri(Path.GetFullPath(path)).AbsoluteUri + (reference.FromPage is { } page ? "#page=" + page : "");
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(target) { UseShellExecute = true }); }
+            catch { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true }); }
+        }
+        else if (reference.Kind == "chronicle") CitedArchiveSource = reference;
+    }
+    private void ToggleSettings()
+    {
+        if (!ShowSettings) { PlayerMarkDraft = State.PlayerMark; PlayerMarkError = ""; GmNotesFocusedId = null; }
+        ShowSettings = !ShowSettings;
+    }
+    private void ResetPlayerMark() { PlayerMarkDraft = "Y"; PlayerMarkError = ""; }
+    private void ResetGmProfile() => State.GmProfile = AppDefaults.DefaultGmProfile;
+    private Task OnVisionSettingChanged()
+    {
+        if (!State.VisionEnabled) RemoveComposerImage();
+        return Task.CompletedTask;
+    }
+    private static string PresentationEffectLabel(string effect) => effect switch { "3d" => "3D", "focus" => "Focus", "shaky" => "Shaky", "vaporwave" => "Vaporwave", "smoke" => "Smoke", "hyperspace" => "Hyperspace", _ => "Focus" };
+    private Task OnGmPresentationSettingsChanged()
+    {
+        State.SaveSettings();
+        return Task.CompletedTask;
+    }
+    private Task OpenComposerImagePicker() => JS.InvokeVoidAsync("clickElementById", "composer-image-picker").AsTask();
+    private void RemoveComposerImage() { ComposerImage = null; ComposerImageError = ""; }
+    private void OpenChronicleImageViewer(string dataUrl, string title = "Chronicle image") { ChronicleImageViewerDataUrl = dataUrl; ChronicleImageViewerTitle = title; ShowChronicleImageViewer = true; }
+    private void CloseChronicleImageViewer() { ShowChronicleImageViewer = false; ChronicleImageViewerDataUrl = null; ChronicleImageViewerTitle = "Chronicle image"; }
+    private string CurrentPlayerName => State.GetPlayerChronicleIdentity(State.Current?.CampaignId ?? State.ActiveCampaignId).DisplayName;
+    private PlayerImageAsset? CurrentPlayerPortrait
+    {
+        get
+        {
+            var campaignId = State.Current?.CampaignId ?? State.ActiveCampaignId;
+            var identity = State.GetPlayerChronicleIdentity(campaignId);
+            return string.IsNullOrWhiteSpace(identity.PortraitMarkdownPath) ? null : MobileHost
+                ? PlayerImages.FindForBrowser(campaignId, identity.PortraitMarkdownPath)
+                : PlayerImages.Find(campaignId, identity.PortraitMarkdownPath);
+        }
+    }
+    private NpcCard? ResolveSpeakerNpc(GmPresentationSegment segment)
+        => segment.SpeakerNpcId is { } id ? State.GetNpcs(State.Current?.CampaignId ?? State.ActiveCampaignId).FirstOrDefault(npc => npc.Id == id) : null;
+    private string NpcSpeakerPortraitStyle(NpcCard npc)
+    {
+        var frame = PortraitStore.ReadFrame(State.Current?.CampaignId ?? State.ActiveCampaignId, npc.Id, npc.PortraitExtension);
+        return FormattableString.Invariant($"object-fit:contain;object-position:50% 50%;transform:translate({frame.X}%,{frame.Y}%) scale({frame.Zoom})");
+    }
+    private static string PlayerIdentityImageStyle(PlayerImageFrame frame) => FormattableString.Invariant($"object-position:50% 50%;transform:translate({frame.X}%,{frame.Y}%) scale({frame.Zoom})");
+    private static string IdentityInitial(string? name) => string.IsNullOrWhiteSpace(name) ? "?" : name.Trim()[0].ToString().ToUpperInvariant();
+    private string? GetChronicleImageDataUrl(string key)
+    {
+        if (State.Current is not { } session) return null;
+        if (_chronicleImageCacheSessionId != session.Id) { _chronicleImageCacheSessionId = session.Id; _chronicleImageDataUrls.Clear(); }
+        if (_chronicleImageDataUrls.TryGetValue(key, out var cached)) return cached;
+        var dataUrl = ChronicleImages.ReadDataUrl(session.CampaignId, session.Id, key);
+        if (dataUrl is not null) _chronicleImageDataUrls[key] = dataUrl;
+        return dataUrl;
+    }
+    private async Task SelectComposerImage(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        if (file.Size <= 0 || file.Size > ChronicleImageAssetStore.MaxImageBytes)
+        {
+            ComposerImageError = "Choose one PNG or JPEG image smaller than 12 MB.";
+            return;
+        }
+        try
+        {
+            await using var input = file.OpenReadStream(ChronicleImageAssetStore.MaxImageBytes);
+            using var buffer = new MemoryStream((int)file.Size);
+            await input.CopyToAsync(buffer);
+            SetComposerImage(file.Name, buffer.ToArray());
+        }
+        catch (Exception ex) { ComposerImageError = "DBLC could not read that image: " + ex.Message; }
+    }
+    [JSInvokable]
+    public Task ReceiveComposerImage(string name, string dataUrl)
+    {
+        if (!State.VisionEnabled || State.Busy) return Task.CompletedTask;
+        try
+        {
+            var comma = dataUrl.IndexOf(',');
+            if (comma < 0) throw new InvalidDataException("That image could not be read.");
+            SetComposerImage(name, Convert.FromBase64String(dataUrl[(comma + 1)..]));
+        }
+        catch (Exception ex) { ComposerImageError = ex.Message; }
+        return InvokeAsync(StateHasChanged);
+    }
+    [JSInvokable] public Task RejectComposerImage(string message) { ComposerImageError = message; return InvokeAsync(StateHasChanged); }
+    private void SetComposerImage(string fileName, byte[] bytes)
+    {
+        var extension = System.IO.Path.GetExtension(fileName).ToLowerInvariant();
+        var isPng = bytes.AsSpan().StartsWith(PngSignature);
+        var isJpeg = bytes.Length >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff;
+        if (!(isPng && extension == ".png") && !(isJpeg && extension is ".jpg" or ".jpeg"))
+            throw new InvalidDataException("Choose a valid PNG or JPEG image.");
+        if (bytes.Length is <= 0 or > ChronicleImageAssetStore.MaxImageBytes) throw new InvalidDataException("Choose an image smaller than 12 MB.");
+        ComposerImage = new ComposerImageDraft(System.IO.Path.GetFileName(fileName), isPng ? "image/png" : "image/jpeg", bytes);
+        ComposerImageError = "";
+    }
+    private void PickFolder()
+    {
+        if (MobileHost) { LibraryStatus = "Change the Library folder from DBLC on the Windows PC."; return; }
+        using var dialog = new System.Windows.Forms.FolderBrowserDialog { Description = "Choose the folder containing your reference PDF books", UseDescriptionForTitle = true, SelectedPath = State.LibraryFolder };
+        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK) { State.SetLibraryFolder(dialog.SelectedPath); LoadCatalogue(); }
+    }
+    private async Task SaveSettings()
+    {
+        if (!AppState.TryNormalizePlayerMark(PlayerMarkDraft, out var playerMark))
+        {
+            PlayerMarkError = "Enter one printable character, or choose a symbol from the suggestions.";
+            return;
+        }
+        if (State.ActiveCampaign is { } campaign && !SurpriseDefaults.IsValid(campaign.SurpriseMachine, out var error))
+        {
+            MachineSettingsError = error;
+            return;
+        }
+        if (State.ActiveCampaign is { } threadCampaign && !OpenThreadReminderScheduler.IsValid(threadCampaign.OpenThreadReminderSettings, out var threadError))
+        {
+            OpenThreadSettingsError = threadError;
+            return;
+        }
+        if (State.ActiveCampaign is { } calendarCampaign)
+        {
+            var calendar = calendarCampaign.DateTimeSettings ??= new CampaignDateTimeSettings();
+            if (!CampaignCalendar.TryValidate(calendar, out var calendarError))
+            {
+                CalendarSettingsError = calendarError;
+                return;
+            }
+            if (CalendarSettingsChanged)
+            {
+                var currentCampaignDay = CampaignAgendaFormat.Day(calendarCampaign.Clock?.TotalMinutes ?? 8 * 60);
+                if (calendar.CalendarMode == "Gregorian") calendar.GregorianAnchorCampaignDay = currentCampaignDay;
+                if (calendar.CalendarMode == "Custom") calendar.CustomAnchorCampaignDay = currentCampaignDay;
+            }
+        }
+        State.SetPlayerMark(playerMark);
+        PlayerMarkDraft = playerMark;
+        PlayerMarkError = "";
+        MachineSettingsError = "";
+        OpenThreadSettingsError = "";
+        CalendarSettingsError = "";
+        CalendarSettingsChanged = false;
+        State.SaveSettings();
+        await RefreshModelId();
+        await RefreshContextMeterAsync();
+        ShowSettings = false;
+    }
+    private void ShowCatalogue() { CatalogueText = "open"; }
+    private void CloseCatalogue() => CatalogueText = null;
+    private void OpenPdf()
+    {
+        if (!string.IsNullOrWhiteSpace(State.PdfPath) && File.Exists(State.PdfPath))
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(State.PdfPath) { UseShellExecute = true });
+    }
+    private async Task ApplyChronicleResponseStateAsync()
+    {
+        var pending = System.Threading.Interlocked.Exchange(ref _responseActivePending, -1);
+        if (pending < 0) return;
+        try
+        {
+            await JS.InvokeVoidAsync(pending == 1 ? "beginChronicleResponse" : "endChronicleResponse", MessagesElement);
+        }
+        catch { System.Threading.Interlocked.CompareExchange(ref _responseActivePending, pending, -1); }
+    }
+    private async Task ScrollToBottom()
+    {
+        try { await JS.InvokeVoidAsync("scrollMessagesToBottom", MessagesElement); } catch { }
+    }
+    private async Task JumpToLatest()
+    {
+        try { await JS.InvokeVoidAsync("jumpChronicleToLatest", MessagesElement); } catch { }
+    }
+    [JSInvokable] public Task ChronicleNavigationReady(string sessionKey)
+    {
+        if (State.Current?.Id.ToString("N") == sessionKey)
+        {
+            ChronicleNeedsInitialPosition = false;
+            return InvokeAsync(StateHasChanged);
+        }
+        return Task.CompletedTask;
+    }
+    [Microsoft.AspNetCore.Components.Inject] private Microsoft.JSInterop.IJSRuntime JS { get; set; } = default!;
+    [Microsoft.AspNetCore.Components.Inject] private GmActivityCatalog ActivityCatalog { get; set; } = default!;
+    private string FlavorClass(string? flavor) => State.GmFlavorFontsEnabled ? flavor switch { "SCRATCHY" => "flavor-scratchy", "HANDWRITTEN" => "flavor-handwritten", "GOTHIC" => "flavor-gothic", "ANCIENT" => "flavor-ancient", "HEAVY" => "flavor-heavy", "UNEASY" => "flavor-uneasy", "GLITCH" or "GLITCH_MEDIUM" => "flavor-glitch flavor-glitch-medium", "GLITCH_LOW" => "flavor-glitch flavor-glitch-low", "GLITCH_CURSED" => "flavor-glitch flavor-glitch-cursed", _ => "" } : "";
+    public void Dispose() { _disposed = true; State.Changed -= StateChanged; MobileWeb.Changed -= OnMobileWebChanged; Paper.Changed -= PaperChanged; PaperWindows.Docked -= OnPaperDocked; Paper.SaveAll(); _genericActivityRotation?.Cancel(); _hoverHide?.Cancel(); _sessionReorderReference?.Dispose(); _npcPortraitPositionReference?.Dispose(); _composerImageReference?.Dispose(); }
+    private sealed record ComposerImageDraft(string Name, string MimeType, byte[] Bytes);
+}

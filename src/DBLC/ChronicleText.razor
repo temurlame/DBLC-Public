@@ -1,0 +1,124 @@
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<div id="@_renderId" @ref="_renderRoot" class="chronicle-render-root">@if (_useServerFallback) { @((MarkupString)_html) }</div>
+
+@code {
+    [Parameter] public string? Text { get; set; }
+    [Parameter] public string? Flavor { get; set; }
+    [Parameter] public int? Seed { get; set; }
+    [Parameter] public string StableKey { get; set; } = "";
+    [Parameter] public bool FlavorsEnabled { get; set; } = true;
+    [Parameter] public bool AnimationsEnabled { get; set; }
+    [Parameter] public string DefaultEffect { get; set; } = "focus";
+    [Parameter] public bool InlineEffectsEnabled { get; set; } = true;
+    [Parameter] public IReadOnlyList<GmNarrationEffectSpan>? EffectSpans { get; set; }
+    [Parameter] public bool IsLiveResponse { get; set; }
+
+    private string _html = "";
+    private readonly string _renderId = "chronicle-render-" + Guid.NewGuid().ToString("N");
+    private ElementReference _renderRoot;
+    private (string? Text, string? Preset, int? Seed, string Key)? _rendered;
+    private (string? Text, bool Live)? _normalizedInputs;
+    private string _displayText = "";
+    private (bool Live, bool Animate, string Default, bool Inline, string SpanSignature, string Key)? _streamInputs;
+    private bool _displayChanged;
+    private bool _hasRendered;
+    private bool _streaming;
+    private bool _useServerFallback;
+    private bool _disposed;
+    private long _renderRevision;
+
+    protected override void OnParametersSet()
+    {
+        var preset = FlavorsEnabled ? Flavor switch
+        {
+            "GLITCH_LOW" => "low", "GLITCH_CURSED" => "cursed",
+            "GLITCH" or "GLITCH_MEDIUM" => "medium", _ => null
+        } : null;
+        if (_normalizedInputs != (Text, IsLiveResponse))
+        {
+            _displayText = ChronicleMarkdownRenderer.NormalizeProseSymbols(GmResponseMarkupParser.ForDisplay(Text), IsLiveResponse);
+            _normalizedInputs = (Text, IsLiveResponse);
+        }
+        var displayText = _displayText;
+        var inputs = (displayText, preset, preset is null ? null : Seed, StableKey);
+        var contentChanged = _rendered != inputs;
+        var canStream = IsLiveResponse && preset is null;
+        var spanSignature = EffectSpans is { Count: > 0 } spans ? string.Join(';', spans.Select(span => span.Start.ToString() + ":" + span.Length.ToString() + ":" + GmNarrationMarkerParser.NormalizeEffect(span.Effect))) : "";
+        var streamInputs = (IsLiveResponse, AnimationsEnabled, GmNarrationMarkerParser.NormalizeEffect(DefaultEffect), InlineEffectsEnabled, spanSignature, StableKey);
+        var streamChanged = _streamInputs != streamInputs;
+        var wasStreaming = _streaming;
+        var displayChanged = contentChanged || wasStreaming != canStream || streamChanged;
+        // Repeated parameters must not cancel a browser update awaiting its render callback.
+        _displayChanged |= displayChanged;
+        _streaming = canStream;
+        _streamInputs = streamInputs;
+        if (displayChanged) _renderRevision++;
+        if (contentChanged) _rendered = inputs;
+        if ((_useServerFallback && (contentChanged || !_hasRendered)) || (!canStream && (contentChanged || wasStreaming || !_hasRendered)))
+        {
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            _html = preset is null ? ChronicleMarkdownRenderer.Render(displayText)
+                : ChronicleMarkdownRenderer.RenderGlitched(displayText, preset, Seed, StableKey);
+            GmRequestDiagnostics.RecordRender(System.Diagnostics.Stopwatch.GetElapsedTime(started));
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_disposed || !_displayChanged) return;
+        _hasRendered = true;
+        _displayChanged = false;
+        if (_useServerFallback) return;
+        var revision = _renderRevision;
+        var streaming = _streaming;
+        var displayText = _displayText;
+        var html = _html;
+        var stableKey = StableKey;
+        var animationsEnabled = AnimationsEnabled;
+        var defaultEffect = DefaultEffect;
+        var effectSpans = EffectSpans ?? Array.Empty<GmNarrationEffectSpan>();
+        try
+        {
+            if (streaming)
+                await JS.InvokeVoidAsync("chronicleStreamEffects.sync", _renderRoot, stableKey, revision, displayText, animationsEnabled, defaultEffect, effectSpans);
+            else
+                await JS.InvokeVoidAsync("chronicleStreamEffects.render", _renderRoot, html, stableKey, revision);
+        }
+        catch
+        {
+            if (_disposed || revision != _renderRevision) return;
+            // If a stale or unavailable browser asset breaks the imperative renderer,
+            // render the same allowlist-sanitized Markdown through Blazor instead of
+            // leaving only the surrounding speaker label visible.
+            _useServerFallback = true;
+            var fallbackDisplayText = _displayText;
+            var preset = FlavorsEnabled ? Flavor switch
+            {
+                "GLITCH_LOW" => "low", "GLITCH_CURSED" => "cursed",
+                "GLITCH" or "GLITCH_MEDIUM" => "medium", _ => null
+            } : null;
+            _html = preset is null ? ChronicleMarkdownRenderer.Render(fallbackDisplayText)
+                : ChronicleMarkdownRenderer.RenderGlitched(fallbackDisplayText, preset, Seed, StableKey);
+            _displayChanged = true;
+            try { await InvokeAsync(StateHasChanged); }
+            catch (InvalidOperationException) { /* Direct component probes have no renderer handle. */ }
+        }
+    }
+
+    // The browser appends clean narration deltas. Completed and historical messages
+    // continue through DBLC's normal sanitized Markdown renderer.
+    protected override bool ShouldRender() => !_disposed && _displayChanged;
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        try { await JS.InvokeVoidAsync("chronicleStreamEffects.dispose", _renderId); }
+        catch (Exception ex) when (ex is JSDisconnectedException or JSException or InvalidOperationException or ObjectDisposedException)
+        {
+            // A closing browser circuit has already removed this component's DOM.
+        }
+    }
+}

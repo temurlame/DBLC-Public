@@ -1,0 +1,48 @@
+@inject AppState State
+
+@if (References is { Count: > 0 } || Sources is { Count: > 0 })
+{
+    <div class="gm-note-references" aria-label="GM source references">
+        @foreach (var reference in References ?? [])
+        {
+            var available = State.CanOpenGmNoteReference(reference);
+            if (available)
+            {
+                <button type="button" class="gm-note-reference" title="Open GM Note" @onclick="() => OnOpen.InvokeAsync(reference)">⌁ @reference.Title</button>
+            }
+            else
+            {
+                <span class="gm-note-reference unavailable" title="This GM Note is unavailable">⌁ @reference.Title · unavailable</span>
+            }
+        }
+        @foreach (var source in Sources ?? [])
+        {
+            var label = source.Kind == "library" && source.FromPage is { } page
+                ? $"{source.Title} · p. {page}" + (source.ToPage is { } end && end != page ? $"–{end}" : "")
+                : source.Title;
+            if (!AllowPrivateSources && source.Kind != "gm_note")
+            {
+                var exists = State.CanOpenSourceReference(source);
+                <span class="gm-note-reference read-only @(exists ? "" : "unavailable")" title="@(exists ? "Open this source in desktop DBLC" : "This source is unavailable")">⌁ @label@(exists ? "" : " · unavailable")</span>
+                continue;
+            }
+            var available = (AllowPrivateSources || source.Kind == "gm_note") && State.CanOpenSourceReference(source);
+            if (available)
+            {
+                <button type="button" class="gm-note-reference" title="Open source" @onclick="() => OnOpenSource.InvokeAsync(source)">⌁ @label</button>
+            }
+            else
+            {
+                <span class="gm-note-reference unavailable" title="This source is unavailable">⌁ @label · unavailable</span>
+            }
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<GmNoteReference>? References { get; set; }
+    [Parameter] public IReadOnlyList<GmSourceReference>? Sources { get; set; }
+    [Parameter] public bool AllowPrivateSources { get; set; } = true;
+    [Parameter] public EventCallback<GmNoteReference> OnOpen { get; set; }
+    [Parameter] public EventCallback<GmSourceReference> OnOpenSource { get; set; }
+}
