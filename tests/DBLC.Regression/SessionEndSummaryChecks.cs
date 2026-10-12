@@ -46,25 +46,25 @@ internal static partial class Checks
         var (continuity, continuityStore) = AuditState(temporary, "session-ending-context", workbench: false);
         var previous = continuity.Current!;
         previous.Lines.AddRange([
-            new ChatLine { Role = "user", Sequence = 1, Content = "I am ready to enter the arch." },
-            new ChatLine { Role = "assistant", Sequence = 2, Content = "You are outside the arch gate. The door is still sealed." }
+            new ChatLine { Role = "user", Sequence = 1, Content = "I am ready to enter the church." },
+            new ChatLine { Role = "assistant", Sequence = 2, Content = "You are outside the church gate. The door is still sealed." }
         ]);
         previous.NextSequence = 3;
         var next = continuity.EndSessionAndStartNext(previous);
         var background = continuity.GetContextHistory(next).Single().Content;
-        Require(background.Contains("outside the arch gate") && background.Contains("ready to enter")
-            && background.IndexOf("ready to enter", StringComparison.Ordinal) < background.IndexOf("outside the arch gate", StringComparison.Ordinal),
+        Require(background.Contains("outside the church gate") && background.Contains("ready to enter")
+            && background.IndexOf("ready to enter", StringComparison.Ordinal) < background.IndexOf("outside the church gate", StringComparison.Ordinal),
             "missing recap supplies the previous Session ending in chronological order");
         Require(next.Lines.Count == 0 && next.OpeningSummary == "" && continuity.GetArchivedLines(next.Id).Count == 0,
             "ending excerpt is request background, not a fabricated recap, Chronicle turn or archive entry");
         var reloaded = NewRepairState(continuityStore, Path.Combine(temporary, "continuity-reload-archive.db"));
         Require(reloaded.GetContextHistory(reloaded.Conversations.Single(item => item.Id == next.Id)).Single().Content == background,
             "existing saved Session linkage reconstructs ending context after reload without new persisted state");
-        using (var server = new ModelStub((_, _) => Text("You remain outside the arch.")))
+        using (var server = new ModelStub((_, _) => Text("You remain outside the church.")))
         {
             continuity.Endpoint = server.Endpoint;
             await continuity.SendAsync("Where are we?", new LlamaClient());
-            Require(server.Requests[0]["messages"]!.ToJsonString().Contains("outside the arch gate"),
+            Require(server.Requests[0]["messages"]!.ToJsonString().Contains("outside the church gate"),
                 "actual initial model request receives previous ending before answering location question");
             Require(server.Requests.Count(request => request["stream"]?.ToString() == "true") == 1,
                 "ending context requires no additional inference pass");

@@ -40,7 +40,7 @@ internal static class LiveProbe
             var timer = Stopwatch.StartNew(); var outcome = "completed";
             try
             {
-                await new LlamaClient().CompleteAsync("http://127.0.0.1:8081/v1", Environment.GetEnvironmentVariable("DBLC_LIVE_MODEL") ?? "Gut Gemma", [new ChatLine { Role = "user", Content = prompt }], "", "",
+                await new LlamaClient().CompleteAsync("http://127.0.0.1:8081/v1", Environment.GetEnvironmentVariable("DBLC_LIVE_MODEL") ?? "local-model", [new ChatLine { Role = "user", Content = prompt }], "", "",
                     () => "book_id: fixture | Fixture Rules | 3 PDF pages | valid DBLC companion available", _ => "Fixture Rules",
                     _ => "Fixture Rules: Character creation p1; Advancement p2; Weather p3.", (_, from, to) => $"Fixture Rules pages {from}-{to}: new characters carry a lantern and rope; one advancement adds 2 HP.",
                     _ => "Fixture Rules companion sections: creation | Character creation | pages 1-1; advancement | Advancement | pages 2-2; weather | Weather | pages 3-3.",

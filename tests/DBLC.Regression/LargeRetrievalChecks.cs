@@ -9,7 +9,7 @@ internal static partial class Checks
 {
     private static async Task LargeRetrievalChecks(string temporary)
     {
-        var player = string.Concat(Enumerable.Repeat("# A quoted \"name\" and an escaped \\ path 🗝️\n", 600)) + "Late player marker: the iron key.\n";
+        var player = string.Concat(Enumerable.Repeat("# A quoted \"name\" and an escaped \\ path 🗝️\n", 600)) + "Late player marker: the silver key.\n";
         var workspace = string.Concat(Enumerable.Repeat("Workspace line with <markup> & symbols.\n", 600)) + "Late workspace marker: the sealed ledger.\n";
         var proposalOpened = false;
         using (var documents = new ModelStub((request, pass) => pass switch
@@ -43,7 +43,7 @@ internal static partial class Checks
 
         using (var findDocuments = new ModelStub((request, pass) => pass switch
         {
-            0 => Calls([("read_player", "{\"query\":\"iron key\"}"), ("read_workspace", "{\"query\":\"sealed ledger\"}")], true),
+            0 => Calls([("read_player", "{\"query\":\"silver key\"}"), ("read_workspace", "{\"query\":\"sealed ledger\"}")], true),
             1 => Calls(ToolOutputs(request).Select((output, index) => (index == 0 ? "read_player" : "read_workspace",
                 JsonSerializer.Serialize(new { offset = int.Parse(Regex.Match(output, @"match_offset: (\d+)").Groups[1].Value) }))).ToArray(), true),
             _ => Text("I found the late records.")
@@ -57,7 +57,7 @@ internal static partial class Checks
             var found = ToolOutputs(findDocuments.Requests[2]).TakeLast(2).ToList();
             Require(matches.Count == 2 && matches.All(match => match.Contains("match_offset:", StringComparison.Ordinal)
                 && JsonSerializer.Serialize(match).Length <= LibraryService.MaxReadResultCharacters)
-                && found[0].Contains("iron key", StringComparison.Ordinal) && found[1].Contains("sealed ledger", StringComparison.Ordinal),
+                && found[0].Contains("silver key", StringComparison.Ordinal) && found[1].Contains("sealed ledger", StringComparison.Ordinal),
                 "literal finds jump to late Player and Workspace text without sequentially reading the whole document");
         }
         var repeatedMatches = string.Join(" ", Enumerable.Range(0, 45).Select(index => $"needle-{index:D2}"));

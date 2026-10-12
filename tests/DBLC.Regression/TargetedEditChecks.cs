@@ -21,18 +21,18 @@ internal static partial class Checks
 
         var (state, _) = AuditState(temporary, "targeted-edits", workbench: false);
         var campaignId = state.Current!.CampaignId;
-        state.SaveNpc(campaignId, "Dally", "## Voice\nQuiet.\n![portrait](assets/dally.png)\nOther: intact\n");
-        var originalNpc = state.FindNpc(campaignId, "Dally")!.Notes;
-        Require(state.EditNpcText(campaignId, "Dally", "Quiet.", "Firm.").Contains("saved", StringComparison.OrdinalIgnoreCase)
-            && state.FindNpc(campaignId, "Dally")!.Notes == originalNpc.Replace("Quiet.", "Firm.", StringComparison.Ordinal),
+        state.SaveNpc(campaignId, "ExampleNpc", "## Voice\nQuiet.\n![portrait](assets/example-npc.png)\nOther: intact\n");
+        var originalNpc = state.FindNpc(campaignId, "ExampleNpc")!.Notes;
+        Require(state.EditNpcText(campaignId, "ExampleNpc", "Quiet.", "Firm.").Contains("saved", StringComparison.OrdinalIgnoreCase)
+            && state.FindNpc(campaignId, "ExampleNpc")!.Notes == originalNpc.Replace("Quiet.", "Firm.", StringComparison.Ordinal),
             "NPC targeted edit keeps all unrelated text and formatting");
-        var npcBefore = state.FindNpc(campaignId, "Dally")!.Notes;
-        Require(!state.EditNpcText(campaignId, "Dally", "Quiet.", "Loud.").Contains("saved", StringComparison.OrdinalIgnoreCase)
-            && state.FindNpc(campaignId, "Dally")!.Notes == npcBefore
-            && state.FindNpc(Guid.NewGuid(), "Dally") is null,
+        var npcBefore = state.FindNpc(campaignId, "ExampleNpc")!.Notes;
+        Require(!state.EditNpcText(campaignId, "ExampleNpc", "Quiet.", "Loud.").Contains("saved", StringComparison.OrdinalIgnoreCase)
+            && state.FindNpc(campaignId, "ExampleNpc")!.Notes == npcBefore
+            && state.FindNpc(Guid.NewGuid(), "ExampleNpc") is null,
             "stale NPC edit is rejected and lookup stays campaign scoped");
-        Require(!state.EditNpcText(campaignId, "Dally", "o", "x").Contains("saved", StringComparison.OrdinalIgnoreCase)
-            && state.FindNpc(campaignId, "Dally")!.Notes == npcBefore,
+        Require(!state.EditNpcText(campaignId, "ExampleNpc", "o", "x").Contains("saved", StringComparison.OrdinalIgnoreCase)
+            && state.FindNpc(campaignId, "ExampleNpc")!.Notes == npcBefore,
             "ambiguous NPC passage cannot alter the card");
 
         var tools = state.GetBestiaryTools(campaignId);

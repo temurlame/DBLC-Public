@@ -2,6 +2,14 @@
 
 DBLC is a Windows tabletop role-playing workspace where a local AI model acts as Game Master. The Chronicle is the table: play is recorded there, while campaign records and reference tools are available alongside it. DBLC is designed for one human owner; an optional mobile browser view can connect to the same desktop instance.
 
+> DBLC is pretty much 100% vibe-coded with Codex, with a few generated assets edited by me. If you'd like to support the project, you can find me on [Ko-fi](https://ko-fi.com/babakrak).
+
+DBLC keeps the campaign at home: a local model runs the game, and an optional mobile browser can connect to the desktop-hosted app over a private network such as Tailscale. The GM has tools for campaign records, reference books, dice, presentation options, campaign time and the optional Surprise Machine. You control the GM Profile and protected instructions; Chronicle messages are recorded as they happen rather than edited or regenerated afterward.
+
+Separate Workbenches let you discuss plans outside the main Session. When you end one, you can review and approve facts or notes to keep. Session summaries can carry forward into the next Session, while older history remains stored for retrieval. Around the existing context threshold, DBLC summarizes older Session material for the model while keeping the original history available locally. A local privacy PIN can restrict opening DBLC or restoring it from the system tray; it is an access lock, not data encryption.
+
+The dice roller supports d4 through d20. You can select a die for your next roll without recording it immediately; the roll enters the Chronicle when you submit it with a message or send an empty turn. Models with vision can receive attached images, and can inspect imported maps when requested and supported by the local server.
+
 ## Screenshots
 
 These screenshots use a fictional demonstration campaign and an original generated map.
@@ -14,7 +22,7 @@ These screenshots use a fictional demonstration campaign and an original generat
 
 ### Chronicle and play
 
-- **Live Chronicle:** streamed GM narration, Markdown, player messages and image attachments, manual dice rolls, and a searchable/retrievable campaign history.
+- **Live Chronicle:** streamed GM narration, recent activity status, Markdown, player messages and image attachments, manual dice rolls, and a searchable/retrievable campaign history.
 - **Character Speakers:** GM responses can identify NPC dialogue with speaker names and saved portraits. Optional narration fonts and presentation effects can be configured for the Chronicle.
 - **Campaigns and Sessions:** keep multiple campaigns and Sessions, summarize or end a Session, carry a saved summary into the next Session, duplicate or export a Chronicle, and browse archived history.
 - **Workbenches:** open a disposable conversation alongside a Session for out-of-character planning. Temporary context compaction helps long Workbenches continue; Review & End lets you approve specific notes or Chronicle facts for retention, while Discard leaves the parent Session unchanged.

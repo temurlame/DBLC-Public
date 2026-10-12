@@ -26,13 +26,13 @@ internal static partial class Checks
         var playerImages = Isolate(new PlayerImageAssetStore(), "_root", campaignsRoot);
         var state = new AppState(store, new LibraryService(), new ChronicleArchiveStore(Path.Combine(data, "archive.db")),
             imageStore, agendaAudit, playerImages, new CampaignMapAssetStore(campaignsRoot));
-        var imported = state.ImportCampaignMap(campaign.Id, "basement", "basement.png", TestMapPng());
+        var imported = state.ImportCampaignMap(campaign.Id, "Cellar", "cellar.png", TestMapPng());
         Require(state.GetImportedMaps(campaign.Id).Single().Id == imported.Id
-            && state.GetMapDisplayEntries(campaign.Id).Single().Title == "basement"
+            && state.GetMapDisplayEntries(campaign.Id).Single().Title == "Cellar"
             && state.GetOwnerMapDataUrl(campaign.Id, imported.Id, "thumbnail")?.StartsWith("data:image/jpeg;base64,", StringComparison.Ordinal) == true,
             "imported image metadata, thumbnail and Maps catalogue remain operational");
-        state.UpdateImportedMap(campaign.Id, imported.Id, "Old basement");
-        Require(state.GetImportedMap(campaign.Id, imported.Id)?.Title == "Old basement"
+        state.UpdateImportedMap(campaign.Id, imported.Id, "Old cellar");
+        Require(state.GetImportedMap(campaign.Id, imported.Id)?.Title == "Old cellar"
             && state.GetCampaignMapImage(campaign.Id, imported.Id, "original") is not null,
             "rename retains the original imported image");
 

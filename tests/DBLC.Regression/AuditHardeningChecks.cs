@@ -37,13 +37,13 @@ internal static partial class Checks
     private static async Task TransientGmContextChecks(string temporary)
     {
         var (state, _) = AuditState(temporary, "transient-gm-context", workbench: false);
-        state.Campaigns[0].Npcs.Add(new NpcCard { Name = "Sample NPC", PortrayalCue = "Broad drawl." });
+        state.Campaigns[0].Npcs.Add(new NpcCard { Name = "Cletus", PortrayalCue = "Broad drawl." });
         state.Campaigns[0].SuccessfulGmExchangesSinceTimeReminder = 6;
         using var server = new ModelStub((_, pass) => pass == 0
-            ? Calls(("read_npc", "{\"name\":\"Sample NPC\"}"))
-            : Text("Sample NPC nods."));
+            ? Calls(("read_npc", "{\"name\":\"Cletus\"}"))
+            : Text("Cletus nods."));
         state.Endpoint = server.Endpoint;
-        await state.SendAsync("I speak with Sample NPC.", new LlamaClient());
+        await state.SendAsync("I speak with Cletus.", new LlamaClient());
         Require(server.Paths.Count(path => path.EndsWith("/chat/completions", StringComparison.Ordinal)) == 2,
             "NPC portrayal and the time reminder do not add an inference pass");
         var initial = (JsonArray)server.Requests[0]["messages"]!;
@@ -55,17 +55,20 @@ internal static partial class Checks
         var context = (string?)initialUser["content"] ?? "";
         Require(initialSystem == continuationSystem && !initialSystem.Contains("Broad drawl.", StringComparison.Ordinal)
             && !initialSystem.Contains("CAMPAIGN TIME REMINDER", StringComparison.Ordinal)
-            && context.Contains("I speak with Sample NPC.", StringComparison.Ordinal)
-            && context.Contains("Sample NPC:\nBroad drawl.", StringComparison.Ordinal)
+            && context.Contains("I speak with Cletus.", StringComparison.Ordinal)
+            && context.Contains("Cletus:\nBroad drawl.", StringComparison.Ordinal)
             && context.Contains("CAMPAIGN TIME REMINDER", StringComparison.Ordinal)
             && context.Contains("CURRENT FICTIONAL CAMPAIGN TIME:", StringComparison.Ordinal)
             && (string?)continuationUser["content"] == context,
             "the actual GM turn and tool continuation retain the same portrayal, reminder, and authoritative time at the request tail");
         var initialTools = (JsonArray)server.Requests[0]["tools"]!;
         var continuationTools = (JsonArray)server.Requests[1]["tools"]!;
-        Require(initialTools.Count == 41 && continuationTools.Count == 41 && initialTools.ToJsonString() == continuationTools.ToJsonString()
+        var expectedTools = (JsonArray)typeof(LlamaClient).GetMethod("BuildTools", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.Invoke(null, [false])!;
+        var expectedNames = expectedTools.OfType<JsonObject>().Select(tool => (string?)tool["function"]?["name"]).ToHashSet(StringComparer.Ordinal);
+        var initialNames = initialTools.OfType<JsonObject>().Select(tool => (string?)tool["function"]?["name"]).ToHashSet(StringComparer.Ordinal);
+        Require(expectedNames.SetEquals(initialNames) && initialTools.ToJsonString() == continuationTools.ToJsonString()
             && continuation.OfType<JsonObject>().Any(message => (string?)message["role"] == "tool"),
-            "all 41 currently supported direct tools remain available on both inference passes");
+            "the full direct tool set remains available on both inference passes");
     }
 
     private static async Task RecentClockToolContextChecks(string temporary)
@@ -478,22 +481,22 @@ internal static partial class Checks
             var npc = new NpcCard { Name = "Example NPC" }; state.Campaigns[0].Npcs.Add(npc);
             Guid? streamedId = null;
             state.Changed += () => { streamedId ??= conversation.Lines.LastOrDefault()?.PresentationSegments?.FirstOrDefault(segment => segment.Speaker == npc.Name)?.Id; };
-            using var server = new ModelStub((_, _) => Delta(new { content = "The GM waits.\n[[speaker:Example NPC]][[smoke]]The door is open." })
+            using var server = new ModelStub((_, _) => Delta(new { content = "The GM waits.\n[[speaker:Example NPC]][[smoke]]Keep the key." })
                 + (present ? Calls(("present_response", "{\"segments\":[{\"speaker\":\"GM\",\"text\":\"She falls silent.\"}]}")) : "data: [DONE]\n\n"));
             state.Endpoint = server.Endpoint;
             await state.SendAsync("Speak as the character.", new LlamaClient());
             var reply = conversation.Lines.Single(line => line.Role == "assistant");
             var segment = reply.PresentationSegments!.Single(item => item.Speaker == npc.Name);
-            Require(segment.Text == "The door is open." && segment.Id == streamedId && segment.SpeakerNpcId == npc.Id,
+            Require(segment.Text == "Keep the key." && segment.Id == streamedId && segment.SpeakerNpcId == npc.Id,
                 "finding 5: streamed NPC identity, stable ID and prose survive final completion");
             Require(segment.NarrationEffectSpans!.Any(span => span.Effect == "smoke"), "finding 5: preserved speaker prefix retains its presentation effect");
             var saved = store.Load().Conversations.Single(item => item.Id == conversation.Id).Lines.Single(line => line.Role == "assistant");
             Require(saved.PresentationSegments!.Single(item => item.SpeakerNpcId == npc.Id).Id == streamedId
-                && saved.ContextContent.Contains("Example NPC: The door is open."), "finding 5: persistence/reload retains speaker-aware context");
+                && saved.ContextContent.Contains("Example NPC: Keep the key."), "finding 5: persistence/reload retains speaker-aware context");
             var archive = new ChronicleArchiveStore(Path.Combine(temporary, "speaker-archive-" + present + ".db"));
             archive.Archive(conversation.Id, [reply]);
             Require(archive.GetArchivedLines(conversation.Id).Single().PresentationSegments!.Single(item => item.SpeakerNpcId == npc.Id).Id == streamedId
-                && archive.Read(conversation.Id, [reply.Sequence]).Contains("Example NPC: The door is open."),
+                && archive.Read(conversation.Id, [reply.Sequence]).Contains("Example NPC: Keep the key."),
                 "finding 5: archive retains speaker metadata and text-only GM retrieval preserves attribution");
             using var next = new ModelStub((_, _) => Text("Understood."));
             state.Endpoint = next.Endpoint;
@@ -502,8 +505,8 @@ internal static partial class Checks
             var assistantContext = (string?)messages.Single(message => (string?)message?["role"] == "assistant")?["content"];
             Require(messages.Count(message => (string?)message?["role"] == "assistant") == 1
                 && assistantContext!.Contains("[[speaker:GM]]The GM waits.", StringComparison.Ordinal)
-                && assistantContext.Contains("[[speaker:Example NPC]]The door is open.", StringComparison.Ordinal)
-                && !assistantContext.Contains("Example NPC: The door is open.", StringComparison.Ordinal),
+                && assistantContext.Contains("[[speaker:Example NPC]]Keep the key.", StringComparison.Ordinal)
+                && !assistantContext.Contains("Example NPC: Keep the key.", StringComparison.Ordinal),
                 "speaker history: next request uses the instructed inline speaker markers in one logical assistant response");
         }
 
@@ -511,7 +514,7 @@ internal static partial class Checks
         var originalNpc = new NpcCard { Name = "Example NPC" }; toolState.Campaigns[0].Npcs.Add(originalNpc);
         using var continuation = new ModelStub((_, pass) =>
         {
-            if (pass == 0) return Delta(new { content = "[[speaker:Example NPC]][[smoke]]The door is open." }) + Calls(("read_player", "{}"));
+            if (pass == 0) return Delta(new { content = "[[speaker:Example NPC]][[smoke]]Keep the key." }) + Calls(("read_player", "{}"));
             toolState.Campaigns[0].Npcs.Clear();
             toolState.Campaigns[0].Npcs.Add(new NpcCard { Name = "Example NPC" });
             return Calls(("present_response", "{\"segments\":[{\"speaker\":\"GM\",\"text\":\"She waits.\"}]}"));
@@ -519,11 +522,11 @@ internal static partial class Checks
         toolState.Endpoint = continuation.Endpoint;
         await toolState.SendAsync("Read and continue.", new LlamaClient());
         var preserved = toolState.Current!.Lines.Single(line => line.Role == "assistant").PresentationSegments!.Single(item => item.Speaker == originalNpc.Name);
-        Require(preserved.SpeakerNpcId == originalNpc.Id && preserved.Text == "The door is open."
+        Require(preserved.SpeakerNpcId == originalNpc.Id && preserved.Text == "Keep the key."
             && preserved.NarrationEffectSpans!.Any(span => span.Effect == "smoke"),
             "finding 5: final continuation preserves the streamed NPC link rather than relinking to a different same-named card");
         Require(continuation.Requests[1]["messages"]!.AsArray().Any(message => (string?)message?["role"] == "assistant"
-            && ((string?)message?["content"])?.Contains("[[speaker:Example NPC]]The door is open.") == true),
+            && ((string?)message?["content"])?.Contains("[[speaker:Example NPC]]Keep the key.") == true),
             "speaker history: in-flight tool continuation receives the instructed inline speaker marker");
     }
 }

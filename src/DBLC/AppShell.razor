@@ -340,7 +340,23 @@
                 <section class="chat-pane">
                 <div class="chat-heading">
                     <div><div class="eyebrow">@(State.Current?.IsWorkbench == true ? $"WORKBENCH · SESSION {CurrentParentSession?.SessionNumber ?? 1}" : $"SESSION {State.Current?.SessionNumber ?? 1}{(State.Current?.IsEnded == true ? " · ENDED" : "")}")</div><h1>@(State.Current?.Title ?? "New session")</h1></div>
-                    <div class="connection"><span class="@(State.Busy || PlayerUpdateApplying ? "pulse-dot" : "online-dot")"></span>@(State.Busy || PlayerUpdateApplying || State.PendingPlayerUpdate is not null ? ActivityStatus : (ServerModelId ?? "LOCAL MODEL"))</div>
+                    <div class="connection @(State.Busy && !MobileHost && !PlayerUpdateApplying ? "connection-activity-stack" : "")">
+                        @if (State.Busy && !MobileHost && !PlayerUpdateApplying)
+                        {
+                            var recentActivities = RecentGmActivities;
+                            <div class="gm-activity-stack" role="status" aria-live="polite">
+                                @for (var i = 0; i < recentActivities.Length; i++)
+                                {
+                                    <div class="gm-activity-row gm-activity-history @(i == 0 ? "oldest" : "newer")">@recentActivities[i]</div>
+                                }
+                                <div class="gm-activity-row gm-activity-current"><span class="pulse-dot"></span>@ActivityStatus</div>
+                            </div>
+                        }
+                        else
+                        {
+                            <span class="@(State.Busy || PlayerUpdateApplying ? "pulse-dot" : "online-dot")"></span>@(State.Busy || PlayerUpdateApplying || State.PendingPlayerUpdate is not null ? ActivityStatus : (ServerModelId ?? "LOCAL MODEL"))
+                        }
+                    </div>
                 </div>
                 <div class="chronicle-viewport">
                 <div class="messages @(ChronicleNeedsInitialPosition ? "chronicle-positioning" : "")" style="--chronicle-text-scale: @State.ChronicleTextScaleCss" @ref="MessagesElement">
@@ -370,6 +386,10 @@
                                 <div class="campaign-record-label">CAMPAIGN RECORD</div>
                                 <div class="campaign-record-content message-content"><ChronicleText Text="@line.Content" /></div>
                             </article>
+                        }
+                        else if (State.Busy && State.GmThinkingSigilEnabled && line.Role == "assistant" && string.IsNullOrEmpty(line.Content) && line.PresentationSegments is not { Count: > 0 } && ReferenceEquals(State.Current?.Lines.LastOrDefault(), line))
+                        {
+                            @* The aligned thinking row below represents this still-empty GM response. *@
                         }
                         else
                         {
@@ -437,7 +457,7 @@
                         <div class="typing">
                             @if (State.GmThinkingSigilEnabled)
                             {
-                                <GmThinkingSigil />
+                                <div class="typing-avatar"><GmThinkingSigil Size="54" /></div>
                             }
                             else
                             {
@@ -1018,6 +1038,9 @@
     private const string GenericWaitingStatus = "Waiting for GM output…";
     private string GenericActivityText = "GM is thinking…";
     private CancellationTokenSource? _genericActivityRotation;
+    private readonly object _gmActivityHistoryLock = new();
+    private readonly List<string> _recentGmActivities = [];
+    private string? _lastObservedGmStatus;
     private bool PlayerUpdateApplying;
     private string PlayerMarkDraft = "Y";
     private string PlayerMarkError = "";
@@ -1582,8 +1605,17 @@
     {
         if (_disposed) return;
         var busy = State.Busy ? 1 : 0;
-        if (System.Threading.Interlocked.Exchange(ref _observedBusy, busy) != busy)
+        var busyChanged = System.Threading.Interlocked.Exchange(ref _observedBusy, busy) != busy;
+        if (busyChanged)
+        {
             System.Threading.Interlocked.Exchange(ref _responseActivePending, busy);
+            lock (_gmActivityHistoryLock)
+            {
+                if (busy == 1) _recentGmActivities.Clear();
+                _lastObservedGmStatus = State.Status;
+            }
+        }
+        if (busy == 1) ObserveGmActivityStatus();
         if (System.Threading.Interlocked.Exchange(ref _stateRefreshQueued, 1) != 0) return;
         _ = InvokeAsync(async () =>
         {
@@ -1642,6 +1674,30 @@
     }
     private string ActivityStatus => PlayerUpdateApplying ? "Updating Player Sheet…" :
         State.Busy && State.Status == GenericWaitingStatus ? GenericActivityText : State.Status;
+    private string[] RecentGmActivities
+    {
+        get { lock (_gmActivityHistoryLock) return _recentGmActivities.ToArray(); }
+    }
+    private void ObserveGmActivityStatus()
+    {
+        lock (_gmActivityHistoryLock)
+        {
+            var current = State.Status;
+            if (string.Equals(current, _lastObservedGmStatus, StringComparison.Ordinal)) return;
+            if (IsSpecificGmActivity(_lastObservedGmStatus) && !string.Equals(_lastObservedGmStatus, current, StringComparison.Ordinal))
+            {
+                if (_recentGmActivities.Count == 0 || !string.Equals(_recentGmActivities[^1], _lastObservedGmStatus, StringComparison.Ordinal))
+                {
+                    _recentGmActivities.Add(_lastObservedGmStatus!);
+                    if (_recentGmActivities.Count > 2) _recentGmActivities.RemoveAt(0);
+                }
+            }
+            _lastObservedGmStatus = current;
+        }
+    }
+    private static bool IsSpecificGmActivity(string? status) =>
+        !string.IsNullOrWhiteSpace(status) &&
+        status is not GenericWaitingStatus and not "GM is responding…" and not "Ready";
     private void ToggleMobileAccess(ChangeEventArgs args)
     {
         try { State.SetMobileRemoteAccessEnabled(args.Value is bool enabled && enabled); MobileAccessError = ""; }

@@ -14,6 +14,8 @@ try
     if (args.Contains("--live")) { await LiveProbe.Run(root, temporary); return; }
     if (args.Contains("--live-map")) { await MapVisionLiveProbe.Run(temporary); return; }
     if (args.Contains("--targeted-edits")) { await Checks.RunTargetedEditChecks(temporary); return; }
+    if (args.Contains("--mistral-template")) { MinistralMessageCompatibilityChecks.Run(); Console.WriteLine("Ministral message compatibility checks passed."); return; }
+    if (args.Contains("--mistral-live")) { await MinistralMessageCompatibilityChecks.RunLiveAsync(); return; }
     if (args.Contains("--skills")) { await Checks.RunSkillChecks(root, temporary); return; }
     if (args.Contains("--maps")) { await Checks.RunMapRemovalChecks(root, temporary); return; }
     if (args.Contains("--large-retrieval"))
@@ -36,9 +38,9 @@ try
     var manyNotes = Enumerable.Range(0, 20_000).Select(index => new GmNote
     {
         Text = $"Campaign note {index:D5}\n" + string.Concat(Enumerable.Repeat("Ordinary reference material for this campaign. ", 10))
-            + (index == 19_999 ? "Example NPC's basement bargain." : "")
+            + (index == 19_999 ? "Example NPC's cellar bargain." : "")
     }).ToList();
-    Measure("gm_note_search_20000", 10, () => GmNoteTransfer.Search(manyNotes, "Example NPC basement"));
+    Measure("gm_note_search_20000", 10, () => GmNoteTransfer.Search(manyNotes, "Example NPC cellar"));
     var toolsMethod = typeof(LlamaClient).GetMethod("BuildTools", BindingFlags.NonPublic | BindingFlags.Static)!;
     var toolSchemas = (JsonArray)toolsMethod.Invoke(null, [false])!;
     results.Add(new { name = "tool_schema_size", tools = toolSchemas.Count, serialized_characters = toolSchemas.ToJsonString().Length,

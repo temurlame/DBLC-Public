@@ -49,6 +49,7 @@ internal static partial class Checks
 
     internal static async Task Run(string root, string temporary)
     {
+        MinistralMessageCompatibilityChecks.Run();
         PrivacyLockChecks(temporary);
         await PersistenceRepairChecks(temporary);
         await FinalPersistenceChecks(temporary);
@@ -109,7 +110,7 @@ internal static partial class Checks
         var promptMessages = (JsonArray)buildMessages.Invoke(null, [
             new List<ChatLine> { new() { Role = "user", Content = "Continue the scene." }, new() { Role = "assistant", Content = "The door opens." } },
             "Archived context", "Previous session recap", "Surprise packet", "NPC names", "◇", false, true,
-            AppDefaults.DefaultGmProfile, "Night", (IReadOnlyList<NpcPortrayalCue>)[new("Sample NPC", "Broad drawl.")], "OPEN THREAD REMINDER\nThe crypt remains unexplored.", false, true, "shaky", true, false, null, "CAMPAIGN TIME REMINDER\nConsider the elapsed time.", null
+            AppDefaults.DefaultGmProfile, "Night", (IReadOnlyList<NpcPortrayalCue>)[new("Cletus", "Broad drawl.")], "OPEN THREAD REMINDER\nThe crypt remains unexplored.", false, true, "shaky", true, false, null, "CAMPAIGN TIME REMINDER\nConsider the elapsed time.", null
         ])!;
         Require(promptMessages.OfType<JsonObject>().Count(message => (string?)message["role"] == "system") == 1, "GM requests retain one leading system message");
         Require((string?)promptMessages[0]?["role"] == "system" && promptMessages.Skip(1).All(message => (string?)message?["role"] is "user" or "assistant"), "system message precedes all conversational messages");
@@ -118,7 +119,7 @@ internal static partial class Checks
         Require(!systemPrompt.Contains("Broad drawl.", StringComparison.Ordinal) && !systemPrompt.Contains("CAMPAIGN TIME REMINDER", StringComparison.Ordinal)
             && systemPrompt.Contains("crypt remains unexplored", StringComparison.Ordinal) && systemPrompt.Contains("Archived context", StringComparison.Ordinal) && systemPrompt.Contains("Surprise packet", StringComparison.Ordinal)
             && latestContext.Contains("CURRENT FICTIONAL CAMPAIGN TIME:\nNight", StringComparison.Ordinal)
-            && latestContext.Contains("Sample NPC:\nBroad drawl.", StringComparison.Ordinal)
+            && latestContext.Contains("Cletus:\nBroad drawl.", StringComparison.Ordinal)
             && latestContext.Contains("CAMPAIGN TIME REMINDER\nConsider the elapsed time.", StringComparison.Ordinal),
             "portrayal and time reminders use the latest DBLC context while other dynamic sections keep their existing placement");
         var withoutTransientContext = (JsonArray)buildMessages.Invoke(null, [
@@ -154,8 +155,8 @@ internal static partial class Checks
         var endWorkbenchParameters = (JsonObject)endWorkbenchTool["function"]!["parameters"]!;
         Require(endWorkbenchParameters["properties"]?["notes"] is JsonObject && endWorkbenchParameters["properties"]?["chronicle_facts"] is JsonObject, "Workbench close tool accepts both reviewed retention categories in the normal inference");
         var parseWorkbenchRetention = typeof(LlamaClient).GetMethod("ParseWorkbenchExitRetentionArguments", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var toolRetention = (WorkbenchExitRetention)parseWorkbenchRetention.Invoke(null, ["{\"notes\":[\"Table ruling\"],\"chronicle_facts\":[\"The shed is sealed\"]}"])!;
-        Require(toolRetention.Notes.SequenceEqual(["Table ruling"]) && toolRetention.ChronicleFacts.SequenceEqual(["The shed is sealed"]), "Workbench tool retention arguments parse into the exact player-review proposal");
+        var toolRetention = (WorkbenchExitRetention)parseWorkbenchRetention.Invoke(null, ["{\"notes\":[\"Table ruling\"],\"chronicle_facts\":[\"The chapel is sealed\"]}"])!;
+        Require(toolRetention.Notes.SequenceEqual(["Table ruling"]) && toolRetention.ChronicleFacts.SequenceEqual(["The chapel is sealed"]), "Workbench tool retention arguments parse into the exact player-review proposal");
         try { parseWorkbenchRetention.Invoke(null, ["{\"notes\":[\"\"],\"chronicle_facts\":[]} "]); throw new Exception("Invalid retention should fail"); }
         catch (TargetInvocationException ex) when (ex.InnerException is InvalidDataException) { Require(true, "invalid Workbench tool retention is rejected locally"); }
         var cleanPresentationArguments = typeof(LlamaClient).GetMethod("CleanPresentationToolArguments", BindingFlags.NonPublic | BindingFlags.Static)!;
@@ -202,10 +203,10 @@ internal static partial class Checks
 
         var speakerParser = new GmNarrationMarkerParser("focus", allowInlineEffects: true, allowCharacterSpeakers: true);
         var speakerBatches = new List<GmNarrationTextBatch>();
-        foreach (var chunk in new[] { "The door opens.\n[[spe", "aker:Example NPC]]\n[[smo", "ke]]Good to see you.\n[[speaker:GM]]She turns. [[hyperspace]]Space.\n[[speaker:Other NPC]]Fine.\n" + tick + "[[speaker:GM]]" + tick + " literal " + tick + "[[speaker:GM]]" + tick + " and\n```text\n[[speaker:Example NPC]]\n[[smoke]]\n```" })
+        foreach (var chunk in new[] { "The door opens.\n[[spe", "aker:Example NPC]]\n[[smo", "ke]]Ah, you look at me.\n[[speaker:GM]]She turns. [[hyperspace]]Space.\n[[speaker:Other NPC]]Fine.\n" + tick + "[[speaker:GM]]" + tick + " literal " + tick + "[[speaker:GM]]" + tick + " and\n```text\n[[speaker:Example NPC]]\n[[smoke]]\n```" })
             speakerBatches.AddRange(speakerParser.Append(chunk));
         speakerBatches.AddRange(speakerParser.Flush());
-        Require(string.Concat(speakerBatches.Select(batch => batch.Text)).Contains("Good to see you.", StringComparison.Ordinal) && speakerBatches.Any(batch => batch.Speaker == "Example NPC" && batch.Effect == "smoke"), "split speaker and effect markers switch the same streaming batches");
+        Require(string.Concat(speakerBatches.Select(batch => batch.Text)).Contains("Ah, you look at me.", StringComparison.Ordinal) && speakerBatches.Any(batch => batch.Speaker == "Example NPC" && batch.Effect == "smoke"), "split speaker and effect markers switch the same streaming batches");
         Require(speakerBatches.Any(batch => batch.Speaker == "GM" && batch.Effect == "focus" && batch.Text.Contains("She turns.", StringComparison.Ordinal)), "speaker change resets effect to default");
         Require(speakerBatches.Any(batch => batch.Speaker == "Other NPC" && batch.Text.Contains("Fine.", StringComparison.Ordinal)), "unknown but valid character names remain unlinked speaker labels");
         Require(string.Concat(speakerBatches.Select(batch => batch.Text)).Contains("literal " + tick + "[[speaker:GM]]" + tick, StringComparison.Ordinal)
@@ -318,7 +319,7 @@ internal static partial class Checks
         Require(escapedHtml.Contains("<pre>"), "escaped fenced code renders as a fenced code block");
         var storageRoot = Path.Combine(temporary, "state-tests");
         var store = new ConversationStore(storageRoot);
-        var campaign = new Campaign { Name = "Synthetic", Npcs = [new NpcCard { Name = "Sample NPC", Notes = "HISTORY_PRIVATE", PortrayalCue = "Rural voice" }],
+        var campaign = new Campaign { Name = "Synthetic", Npcs = [new NpcCard { Name = "Cletus", Notes = "HISTORY_PRIVATE", PortrayalCue = "Rural voice" }],
             Bestiary = [new BestiaryEntry { Name = "Goblin", StatBlock = "HP 3", Notes = "Field note", Slain = 2, PortraitExtension = ".png" }],
             SavedMaps = [JsonNode.Parse("""{"Id":"legacy-sketch","Name":"Old sketch","Sketch":{"Name":"Old","Features":{"G7":"table"}}}""")!.AsObject()], GmNotes = [new GmNote { Text = "GM_PRIVATE" }] };
         var state = new SavedState("local", "fixture", "", null, [new Conversation { CampaignId = campaign.Id, Lines = [new ChatLine { Content = md }] }], [campaign]);
@@ -338,9 +339,9 @@ internal static partial class Checks
         archive.Archive(session, [archived]); archive.Archive(session, [archived]);
         Require(archive.GetArchivedLines(session).Count == 1 && archive.Search(session, "lantern").Contains("lantern"), "archive idempotent/searchable");
         Require(archive.GetArchivedLines(session)[0].PresentationSegments![0].GlitchSeed == 123, "archive expression metadata");
-        Require(NpcPortrayalMatcher.Match(campaign.Npcs, "Sample NPC's shack", "Sample NPC").Cues.Count == 1, "cue deduplication");
+        Require(NpcPortrayalMatcher.Match(campaign.Npcs, "CLETUS's shack", "Cletus").Cues.Count == 1, "cue deduplication");
         Require(NpcPortrayalMatcher.Match([new NpcCard { Name = "Ed", PortrayalCue = "Quiet" }], "red bed", "").Cues.Count == 0, "cue boundary");
-        var activeSpeakerNpc = new NpcCard { Id = Guid.NewGuid(), Name = "Sample NPC", PortrayalCue = "Bold, eager voice." };
+        var activeSpeakerNpc = new NpcCard { Id = Guid.NewGuid(), Name = "Sarah Whittal", PortrayalCue = "Bold, eager voice." };
         var previousNpcSpeech = new ChatLine
         {
             Role = "assistant", Sequence = 10, Content = "She watches from the pillar.",
@@ -387,14 +388,14 @@ internal static partial class Checks
         }
         using (var countServer = new ModelStub((_, _) => "{\"input_tokens\":73}"))
         {
-            var count = await new LlamaClient().CountInputTokensAsync(countServer.Endpoint, "fixture", [], "", campaignTime: "Cinderfall 4",
+            var count = await new LlamaClient().CountInputTokensAsync(countServer.Endpoint, "fixture", [], "", campaignTime: "Examplemonth 4",
                 allowCharacterSpeakers: true, isWorkbench: true, retainedWorkbenchArtifacts: ["Player Sheet updated"], streamAnimationsEnabled: true);
             var payload = countServer.Requests.Single().ToJsonString();
             Require(count == 73 && payload.Contains("CHARACTER SPEAKERS", StringComparison.Ordinal)
                 && payload.Contains("GM STREAM PRESENTATION", StringComparison.Ordinal)
                 && payload.Contains("WORKBENCH AWARENESS", StringComparison.Ordinal)
                 && payload.Contains("Player Sheet updated", StringComparison.Ordinal)
-                && payload.Contains("Cinderfall 4", StringComparison.Ordinal),
+                && payload.Contains("Examplemonth 4", StringComparison.Ordinal),
                 "context count request includes active speaker, stream, Workbench, retained-artifact and campaign-time instructions");
         }
         var root = Path.Combine(temporary, "workbench-local-compaction");
@@ -579,9 +580,9 @@ internal static partial class Checks
         Require(jpegMap.Extension == ".jpg" && state.GetOwnerMapDataUrl(campaign.Id, jpegMap.Id, "original")?.StartsWith("data:image/jpeg;base64,", StringComparison.Ordinal) == true, "JPEG maps preserve their original format");
         Require(state.GetImportedMaps(campaign.Id).Count == 3 && state.GetMapDisplayEntries(campaign.Id).Count == 3, "all imported maps appear in the shared campaign Maps catalogue");
         Require(state.GetCampaignMapImage(campaign.Id, map.Id, "original") is not null && state.GetCampaignMapImage(Guid.NewGuid(), map.Id, "thumbnail") is null, "map image lookup remains campaign scoped");
-        state.UpdateImportedMap(campaign.Id, map.Id, "Secret basement map");
+        state.UpdateImportedMap(campaign.Id, map.Id, "Secret cellar map");
         var renamedListing = state.GetMapDisplayEntries(campaign.Id).Single(entry => entry.Id == map.Id);
-        Require(renamedListing.Title == "Secret basement map" && renamedListing.Width == map.Width && renamedListing.Height == map.Height
+        Require(renamedListing.Title == "Secret cellar map" && renamedListing.Width == map.Width && renamedListing.Height == map.Height
             && state.GetOwnerMapDataUrl(campaign.Id, map.Id, "original") is not null, "renamed maps retain their shared catalogue details and full image");
         var serviceSource = File.ReadAllText(Path.Combine(root, "src", "DBLC", "Services.cs"));
         Require(!serviceSource.Contains("set_campaign_map_visibility", StringComparison.Ordinal), "GM tools no longer include map hide/share controls");
@@ -837,9 +838,7 @@ internal static partial class Checks
 
     private static async Task ArtifactChecks(string temporary, Campaign seed)
     {
-        // These checks exercise image storage; keep a tiny valid image fixture self-contained.
-        File.WriteAllBytes(Path.Combine(temporary, "image.png"), Convert.FromBase64String(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/8ioAAAAASUVORK5CYII="));
+        File.WriteAllBytes(Path.Combine(temporary, "image.png"), Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"));
         var data = Path.Combine(temporary, "artifact-tests");
         var store = new ConversationStore(data);
         var parent = new Conversation { CampaignId = seed.Id, SessionNumber = 0 };
@@ -863,21 +862,21 @@ internal static partial class Checks
             otherStore.Load().Campaigns![0].GmNotes![0].Text == initialNotes[0].Text, "JSON imports into a separate installation and campaign with stable IDs");
         Require(portable.Contains("\"version\": 1", StringComparison.Ordinal) && GmNoteTransfer.ExportMarkdown(initialNotes).Contains("# GM Notes", StringComparison.Ordinal), "GM Notes exports are versioned JSON and readable Markdown");
         var importedId = Guid.NewGuid();
-        var candidate = GmNoteTransfer.ExportJson([new GmNote { Id = importedId, Text = "The basement bargain\nis settled." }, new GmNote { Id = initialNotes[0].Id, Text = "Changed private ruling" }]);
+        var candidate = GmNoteTransfer.ExportJson([new GmNote { Id = importedId, Text = "The cellar bargain\nis settled." }, new GmNote { Id = initialNotes[0].Id, Text = "Changed private ruling" }]);
         var safePreview = app.PreviewGmNoteImport(seed.Id, candidate, false);
         Require(safePreview.CreatedCount == 1 && safePreview.UpdatedCount == 0 && safePreview.Rejected == 1, "conflicting IDs are rejected by default");
         var updatePreview = app.PreviewGmNoteImport(seed.Id, candidate, true);
         Require(updatePreview.CreatedCount == 1 && updatePreview.UpdatedCount == 1, "conflicting IDs require explicit update selection");
         app.ApplyGmNoteImport(updatePreview);
         Require(app.GetGmNotes(seed.Id).Any(note => note.Id == importedId) && store.Load().Campaigns![0].GmNotes!.Any(note => note.Id == importedId), "confirmed GM Note import persists to selected campaign");
-        Require(!app.SearchGmNotes(Guid.NewGuid(), "basement").Contains(importedId.ToString("N"), StringComparison.Ordinal), "GM Note search is isolated by campaign");
-        Require(app.ReadGmNote(seed.Id, importedId.ToString("N")).Contains("basement bargain", StringComparison.Ordinal), "GM can read one matching note by stable ID");
+        Require(!app.SearchGmNotes(Guid.NewGuid(), "cellar").Contains(importedId.ToString("N"), StringComparison.Ordinal), "GM Note search is isolated by campaign");
+        Require(app.ReadGmNote(seed.Id, importedId.ToString("N")).Contains("cellar bargain", StringComparison.Ordinal), "GM can read one matching note by stable ID");
         var citedReply = new ChatLine { Role = "assistant", Content = "The prior ruling applies.", Sequence = 701 };
         app.ReadGmNote(seed.Id, importedId.ToString("N"));
         Require(citedReply.GmNoteReferences is null, "reading a GM Note alone does not claim it informed the response");
-        citedReply.GmNoteReferences = [new GmNoteReference(seed.Id, importedId, "The basement bargain")]; // Historical snapshot compatibility.
+        citedReply.GmNoteReferences = [new GmNoteReference(seed.Id, importedId, "The cellar bargain")]; // Historical snapshot compatibility.
         var citation = citedReply.GmNoteReferences!.Single();
-        Require(citation.CampaignId == seed.Id && citation.NoteId == importedId && citation.Title == "The basement bargain", "historical GM Note reference remains stable and title-only");
+        Require(citation.CampaignId == seed.Id && citation.NoteId == importedId && citation.Title == "The cellar bargain", "historical GM Note reference remains stable and title-only");
         Require(!JsonSerializer.Serialize(citation).Contains("is settled.", StringComparison.Ordinal), "Chronicle note metadata excludes full note text");
         var citationSnapshot = MobileChronicleSnapshot.Capture(new Conversation { Lines = [citedReply] });
         Require(citationSnapshot.Lines[0].GmNoteReferences?.Single() == citation, "mobile Chronicle snapshot carries note references");
@@ -924,16 +923,16 @@ internal static partial class Checks
         Require(malformedRejected, "malformed GM Note import is rejected without mutation");
         var duplicateFile = GmNoteTransfer.ExportJson([new GmNote { Id = importedId, Text = "Duplicate one" }, new GmNote { Id = importedId, Text = "Duplicate two" }]);
         Require(app.PreviewGmNoteImport(seed.Id, duplicateFile, false).Rejected == 2, "duplicate IDs and conflicts are counted before import");
-        var thousands = Enumerable.Range(0, 5000).Select(index => new GmNote { Text = index == 4312 ? "Example NPC's basement note" : $"Routine ruling {index}" }).ToList();
+        var thousands = Enumerable.Range(0, 5000).Select(index => new GmNote { Text = index == 4312 ? "Example NPC's cellar ruling" : $"Routine ruling {index}" }).ToList();
         var searchClock = System.Diagnostics.Stopwatch.StartNew();
-        var targeted = GmNoteTransfer.Search(thousands, "Example NPC basement");
+        var targeted = GmNoteTransfer.Search(thousands, "Example NPC cellar");
         searchClock.Stop();
         Require(targeted.Contains("Example NPC", StringComparison.Ordinal) && targeted.Length < 1000 && searchClock.Elapsed < TimeSpan.FromSeconds(5), "5,000-note search is targeted, bounded, and fast");
         var relevance = GmNoteTransfer.Search([
-            new GmNote { Text = "NPC attends the market" },
-            new GmNote { Text = "Example NPC's basement note" }
+            new GmNote { Text = "Example attends the market" },
+            new GmNote { Text = "Example NPC's cellar ruling" }
         ], "Example NPC");
-        Require(relevance.IndexOf("Example NPC", StringComparison.Ordinal) < relevance.IndexOf("NPC attends", StringComparison.Ordinal), "multi-term GM Note search ranks the complete match first");
+        Require(relevance.IndexOf("Example NPC", StringComparison.Ordinal) < relevance.IndexOf("Example attends", StringComparison.Ordinal), "multi-term GM Note search ranks the complete match first");
         var manyMatches = GmNoteTransfer.Search(thousands, "Routine");
         Require(manyMatches.Split("note_id:", StringSplitOptions.None).Length - 1 == GmNoteTransfer.MaxResults, "GM Note search caps matching results");
         var largeExport = GmNoteTransfer.ExportJson(thousands);
@@ -943,7 +942,7 @@ internal static partial class Checks
         Require(GmNoteTransfer.Preview(GmNoteTransfer.ExportJson([whitespaceNote]), seed.Id, [], false).Creates.Single().Text == whitespaceNote.Text, "portable JSON round trip preserves exact note content");
         Console.WriteLine($"GM Notes: 5,000-note local search {searchClock.Elapsed.TotalMilliseconds:0.0} ms; result {targeted.Length} chars; import preview {largePreview.CreatedCount} notes.");
         app.DeleteGmNote(seed.Id, importedId);
-        Require(!app.CanOpenGmNoteReference(citation) && citation.Title == "The basement bargain", "deleted note leaves an unavailable historical reference with its frozen title");
+        Require(!app.CanOpenGmNoteReference(citation) && citation.Title == "The cellar bargain", "deleted note leaves an unavailable historical reference with its frozen title");
         var failedTurn = new ChatLine { Role = "assistant", EntryType = "technical_error", Content = "Could not reach the model endpoint." };
         var historyProbe = new Conversation { Lines = [new ChatLine { Role = "user", Content = "Try again." }, failedTurn, new ChatLine { Role = "assistant", Content = "A real GM response." }] };
         Require(app.GetContextHistory(historyProbe).Count == 2 && historyProbe.Lines.Contains(failedTurn), "technical error remains in Chronicle but is excluded from GM history by entry type");
@@ -1174,13 +1173,13 @@ internal static partial class Checks
     {
         var reads = 0;
         using (var server = new ModelStub((_, pass) => pass == 0
-            ? Calls(("request_end_workbench", "{\"notes\":[\"Table ruling\"],\"chronicle_facts\":[\"The shed is sealed\"]}"))
+            ? Calls(("request_end_workbench", "{\"notes\":[\"Table ruling\"],\"chronicle_facts\":[\"The chapel is sealed\"]}"))
             : Text("The GM gives a brief goodbye.")))
         {
             WorkbenchExitRetention? proposed = null;
             var visible = new StringBuilder();
             await RunModel(server, visible, onWorkbenchEnd: retention => { proposed = retention; return Task.FromResult("The player approved; do not request closure again this turn."); }, isWorkbench: true);
-            Require(proposed?.Notes.SequenceEqual(["Table ruling"]) == true && proposed.ChronicleFacts.SequenceEqual(["The shed is sealed"]), "GM close tool passes its own reviewed proposals without a second model request");
+            Require(proposed?.Notes.SequenceEqual(["Table ruling"]) == true && proposed.ChronicleFacts.SequenceEqual(["The chapel is sealed"]), "GM close tool passes its own reviewed proposals without a second model request");
             Require(server.Requests.Count == 2 && visible.ToString() == "The GM gives a brief goodbye.", "Workbench closure proposal and confirmation use the normal GM inference/tool continuation");
         }
         using (var server = new ModelStub((_, pass) => pass == 0 ? Calls(("read_player", "{}"), ("read_workspace", "{}")) : Text("Complete.")))
@@ -1340,12 +1339,12 @@ internal static partial class Checks
 
     private static async Task ChronicleOrderAndArrowChecks(string temporary)
     {
-        const string arrowSource = "Gain $\\rightarrow$ 25 iron; $\\leftarrow$ return; $\\leftrightarrow$ exchange.";
+        const string arrowSource = "Gain $\\rightarrow$ 25 silver; $\\leftarrow$ return; $\\leftrightarrow$ exchange.";
         var arrowHtml = ChronicleMarkdownRenderer.Render(arrowSource);
-        Require(arrowHtml.Contains("→ 25 iron", StringComparison.Ordinal) && arrowHtml.Contains("← return", StringComparison.Ordinal)
+        Require(arrowHtml.Contains("→ 25 silver", StringComparison.Ordinal) && arrowHtml.Contains("← return", StringComparison.Ordinal)
             && arrowHtml.Contains("↔ exchange", StringComparison.Ordinal), "simple model LaTeX arrows render as Unicode in saved prose");
         Require(ChronicleMarkdownRenderer.NormalizeProseSymbols("Gain $\\right", true) == "Gain "
-            && ChronicleMarkdownRenderer.NormalizeProseSymbols(arrowSource, true).Contains("→ 25 iron", StringComparison.Ordinal),
+            && ChronicleMarkdownRenderer.NormalizeProseSymbols(arrowSource, true).Contains("→ 25 silver", StringComparison.Ordinal),
             "split streaming arrow tokens append only their finished Unicode symbol");
         var protectedSource = "`$\\rightarrow$`\n\n```text\n$\\leftarrow$\n```\n\n$x \\rightarrow y$ and \\$\\rightarrow$";
         var protectedHtml = ChronicleMarkdownRenderer.Render(protectedSource);
@@ -1367,7 +1366,7 @@ internal static partial class Checks
         state.Changed += () =>
         {
             if (steered || state.Current?.Lines.LastOrDefault()?.Content != "The GM finishes the breakdown.") return;
-            steered = state.SteerCurrentResponse("I will change the iron myself.");
+            steered = state.SteerCurrentResponse("I will change the silver myself.");
         };
         var firstPresentation = JsonSerializer.Serialize(new { segments = new[] { new { speaker = "GM", text = "The GM finishes the breakdown." } } });
         var continuationPresentation = JsonSerializer.Serialize(new { segments = new[] { new { speaker = "GM", text = "Understood. The ledger remains yours." } } });
@@ -1381,7 +1380,7 @@ internal static partial class Checks
         var lines = state.Current!.Lines;
         Require(lines.Select(line => line.Role).SequenceEqual(["user", "assistant", "user", "assistant"])
             && lines[1].Content == "The GM finishes the breakdown."
-            && lines[2].Content == "I will change the iron myself."
+            && lines[2].Content == "I will change the silver myself."
             && lines[3].Content == "Understood. The ledger remains yours.",
             "already-visible GM narration remains before a late steer without duplicating the presentation prefix");
         Require(lines.Select(line => line.Sequence).SequenceEqual(lines.Select(line => line.Sequence).OrderBy(sequence => sequence))
@@ -1428,7 +1427,7 @@ internal static partial class Checks
         var speakerStart = JsonSerializer.Serialize(new { segments = new[]
         {
             new { speaker = "GM", text = "The ledger opens." },
-            new { speaker = "Example NPC", text = "[[smoke]]The trade is settled." }
+            new { speaker = "Example NPC", text = "[[smoke]]The debt stands." }
         } });
         var speakerEnd = JsonSerializer.Serialize(new { segments = new[] { new { speaker = "GM", text = "[[focus]]She closes the ledger." } } });
         using (var server = new ModelStub((_, pass) => pass == 0 ? Calls(("present_response", speakerStart)) : Calls(("present_response", speakerEnd))))
@@ -1448,7 +1447,7 @@ internal static partial class Checks
         state.Current.Lines.Add(arrowLine);
         state.SaveSettings();
         var loadedArrow = store.Load().Conversations.Single().Lines.Single(line => line.Id == arrowLine.Id);
-        Require(loadedArrow.Content == arrowSource && ChronicleMarkdownRenderer.Render(loadedArrow.Content).Contains("→ 25 iron", StringComparison.Ordinal),
+        Require(loadedArrow.Content == arrowSource && ChronicleMarkdownRenderer.Render(loadedArrow.Content).Contains("→ 25 silver", StringComparison.Ordinal),
             "reloading retains the model's source text and displays its prose arrow consistently");
     }
 
@@ -1491,8 +1490,8 @@ internal static partial class Checks
             && leapDay == 30 && CampaignCalendar.GmMoment(gregorian, (leapDay - 1L) * 1440).StartsWith("Thu · Feb 29, 2024", StringComparison.Ordinal),
             "Gregorian lookup resolves leap-day weekday using the configured date anchor");
 
-        custom.CustomPeriods = "Cinderfall, 13\nSecondmonth, 3";
-        custom.CustomAnchorPeriod = "Cinderfall";
+        custom.CustomPeriods = "Examplemonth, 13\nFrost, 3";
+        custom.CustomAnchorPeriod = "Examplemonth";
         custom.CustomAnchorDay = 10;
         custom.CustomAnchorCampaignDay = 10;
         custom.CustomAnchorYear = 7;
@@ -1500,10 +1499,10 @@ internal static partial class Checks
         custom.CustomAnchorWeekday = "D";
         custom.CustomEra = "Example Era";
         Require(CampaignCalendar.GmMoment(custom, (10L - 1) * 1440 + 11 * 60 + 30)
-            .StartsWith("D, Cinderfall 10, Example Era 7 · Morning (11:30 AM) · Campaign Day 10", StringComparison.Ordinal),
+            .StartsWith("D, Examplemonth 10, Example Era 7 · Morning (11:30 AM) · Campaign Day 10", StringComparison.Ordinal),
             "GM time context includes the custom calendar day-of-month as well as weekday, month, year, and clock");
-        Require(CampaignCalendar.TryResolveCampaignDay(custom, 10, "Cinderfall", 13, null, out var thirteenth, out _)
-            && thirteenth == 13 && CampaignCalendar.GmMoment(custom, (thirteenth - 1L) * 1440).StartsWith("B, Cinderfall 13, Example Era 7", StringComparison.Ordinal),
+        Require(CampaignCalendar.TryResolveCampaignDay(custom, 10, "Examplemonth", 13, null, out var thirteenth, out _)
+            && thirteenth == 13 && CampaignCalendar.GmMoment(custom, (thirteenth - 1L) * 1440).StartsWith("B, Examplemonth 13, Example Era 7", StringComparison.Ordinal),
             "custom date lookup uses configured weekday anchors rather than Gregorian weekdays");
 
         var campaign = new Campaign { Name = "Calendar visibility", DateTimeSettings = custom };
@@ -1517,36 +1516,36 @@ internal static partial class Checks
             Isolate(new PlayerImageAssetStore(), "_root", Path.Combine(data, "campaigns")));
         campaign = state.Campaigns.Single();
         var tools = state.GetAgendaTools(campaign.Id);
-        var CinderfallCalendar = new CampaignDateTimeSettings
+        var ExamplemonthCalendar = new CampaignDateTimeSettings
         {
-            CalendarMode = "Custom", CustomWeekdays = "Nightday\nGods\nEmberday\nWyrms\nSaints\nAsh\nGraves",
-            CustomPeriods = "Cinderfall, 30\nAshwane, 27\nLongnight, 31", CustomAnchorWeekday = "Emberday",
-            CustomAnchorDay = 4, CustomAnchorPeriod = "Cinderfall", CustomAnchorYear = 809,
+            CalendarMode = "Custom", CustomWeekdays = "Firstday\nGods\nThirdday\nWyrms\nSaints\nAsh\nGraves",
+            CustomPeriods = "Examplemonth, 30\nSecondmonth, 27\nThirdmonth, 31", CustomAnchorWeekday = "Thirdday",
+            CustomAnchorDay = 4, CustomAnchorPeriod = "Examplemonth", CustomAnchorYear = 809,
             CustomAnchorCampaignDay = 1, CustomEra = ""
         };
-        campaign.DateTimeSettings = CinderfallCalendar;
+        campaign.DateTimeSettings = ExamplemonthCalendar;
         campaign.Clock!.TotalMinutes = 690;
-        Require(state.GetCampaignGmMoment(campaign.Id).StartsWith("Emberday, Cinderfall 4, Year 809 · Morning (11:30 AM) · Campaign Day 1", StringComparison.Ordinal),
-            "initial GM campaign-time context spells out Cinderfall day 4 rather than only Campaign Day 1");
-        var CinderfallTwentyThird = tools.Read(new JsonObject { ["month"] = "Cinderfall", ["day_of_month"] = 23L });
-        Require(CinderfallTwentyThird.Contains("Nightday, Cinderfall 23, Year 809", StringComparison.Ordinal)
-            && CinderfallTwentyThird.Contains("Campaign Day 20", StringComparison.Ordinal)
-            && CinderfallTwentyThird.Contains("Campaign-day offset: 19", StringComparison.Ordinal),
+        Require(state.GetCampaignGmMoment(campaign.Id).StartsWith("Thirdday, Examplemonth 4, Year 809 · Morning (11:30 AM) · Campaign Day 1", StringComparison.Ordinal),
+            "initial GM campaign-time context spells out Examplemonth day 4 rather than only Campaign Day 1");
+        var ExamplemonthTwentyThird = tools.Read(new JsonObject { ["month"] = "Examplemonth", ["day_of_month"] = 23L });
+        Require(ExamplemonthTwentyThird.Contains("Firstday, Examplemonth 23, Year 809", StringComparison.Ordinal)
+            && ExamplemonthTwentyThird.Contains("Campaign Day 20", StringComparison.Ordinal)
+            && ExamplemonthTwentyThird.Contains("Campaign-day offset: 19", StringComparison.Ordinal),
             "read_agenda includes the requested custom month-day and its independently calculated campaign-day mapping");
         campaign.DateTimeSettings = custom;
         campaign.Clock.TotalMinutes = (10L - 1) * 1440 + 11 * 60 + 30;
-        var dateLookup = tools.Read(new JsonObject { ["month"] = "Cinderfall", ["day_of_month"] = 13L });
-        Require(dateLookup.Contains("B, Cinderfall 13, Example Era 7", StringComparison.Ordinal)
+        var dateLookup = tools.Read(new JsonObject { ["month"] = "Examplemonth", ["day_of_month"] = 13L });
+        Require(dateLookup.Contains("B, Examplemonth 13, Example Era 7", StringComparison.Ordinal)
             && dateLookup.Contains("Campaign-day offset: 3", StringComparison.Ordinal)
             && !dateLookup.Contains("Private arrival", StringComparison.Ordinal),
             "read_agenda date lookup returns deterministic custom date/offset without dumping event entries");
         var currentDateLookup = tools.Read(new JsonObject { ["calendar_day"] = 10L });
-        Require(currentDateLookup.Contains("D, Cinderfall 10, Example Era 7", StringComparison.Ordinal)
+        Require(currentDateLookup.Contains("D, Examplemonth 10, Example Era 7", StringComparison.Ordinal)
             && currentDateLookup.Contains("Campaign-day offset: 0 (today)", StringComparison.Ordinal),
             "read_agenda resolves today's weekday from the authoritative campaign day");
         campaign.DateTimeSettings = new CampaignDateTimeSettings { CalendarMode = "DayCount" };
         Require(tools.Read(new JsonObject { ["calendar_day"] = 10L }).Contains("Day 10", StringComparison.Ordinal)
-            && tools.Read(new JsonObject { ["month"] = "Cinderfall", ["day_of_month"] = 13L }).Contains("Day Count", StringComparison.Ordinal),
+            && tools.Read(new JsonObject { ["month"] = "Examplemonth", ["day_of_month"] = 13L }).Contains("Day Count", StringComparison.Ordinal),
             "Day Count lookup retains numeric-day semantics and rejects invented named months");
         campaign.DateTimeSettings = custom;
         Require(tools.AddEvent(new JsonObject { ["title"] = "Visible meeting", ["day"] = 12L, ["hour"] = 9L, ["minute"] = 0L, ["visibility"] = "player" }).Contains("Agenda event added", StringComparison.Ordinal), "player-visible calendar event can be scheduled");
@@ -1571,7 +1570,7 @@ internal static partial class Checks
             "advance_time applies hour units to the same authoritative clock");
         Require(tools.Advance(new JsonObject { ["amount"] = 3L, ["unit"] = "days" }).Contains("Time advanced", StringComparison.Ordinal)
             && CampaignAgendaFormat.Day(campaign.Clock.TotalMinutes) == 17
-            && CampaignCalendar.GmMoment(custom, campaign.Clock.TotalMinutes).StartsWith("A, Cinderfall 1, Example Era 8", StringComparison.Ordinal),
+            && CampaignCalendar.GmMoment(custom, campaign.Clock.TotalMinutes).StartsWith("A, Examplemonth 1, Example Era 8", StringComparison.Ordinal),
             "day advancement respects custom month lengths and crosses the configured year boundary");
         state.SaveSettings();
         Require(store.Load().Campaigns!.Single().Clock!.TotalMinutes == campaign.Clock.TotalMinutes,
@@ -1612,10 +1611,10 @@ internal static partial class Checks
             var systemText = (string?)messages[0]?["content"] ?? "";
             var finalUserText = (string?)messages[^1]?["content"] ?? "";
             Require(systemText.Contains("Use advance_time when the player requests a time advance or fiction clearly advances meaningful time", StringComparison.Ordinal)
-                && !systemText.Contains("A, Cinderfall 1, Example Era 8", StringComparison.Ordinal)
+                && !systemText.Contains("A, Examplemonth 1, Example Era 8", StringComparison.Ordinal)
                 && finalUserText.Contains("We wait quietly.", StringComparison.Ordinal)
                 && finalUserText.Contains("CURRENT FICTIONAL CAMPAIGN TIME:\n", StringComparison.Ordinal)
-                && finalUserText.Contains("A, Cinderfall 1, Example Era 8", StringComparison.Ordinal),
+                && finalUserText.Contains("A, Examplemonth 1, Example Era 8", StringComparison.Ordinal),
                 "normal GM request keeps stable Agenda guidance early and supplies the authoritative clock with the latest turn");
         }
         var shell = File.ReadAllText(Path.Combine(root, "src", "DBLC", "AppShell.razor"));
@@ -1732,7 +1731,7 @@ internal static partial class Checks
         var structured = JsonSerializer.Serialize(new { segments = new[]
         {
             new { speaker = "GM", text = "The door opens." },
-            new { speaker = "Example NPC", text = "\n[[smoke]]Good to see you." },
+            new { speaker = "Example NPC", text = "\n[[smoke]]Ah, you look at me." },
             new { speaker = "THE GM", text = "\n[[focus]]She turns away." }
         } });
         using (var server = new ModelStub((_, _) => Calls(("present_response", structured))))
@@ -1746,7 +1745,7 @@ internal static partial class Checks
             Require(segments.Select(segment => segment.Speaker).SequenceEqual(["GM", "Example NPC", "GM"]), "GM aliases collapse and speaker switching groups consecutive narration");
             Require(segments[1].SpeakerNpcId == npc.Id && segments[1].NarrationEffectSpans!.Any(span => span.Effect == "smoke"), "NPC link and inline effect resolve into the same persisted segment");
             Require(segments[2].Speaker == "GM" && segments[2].NarrationEffectSpans!.Any(span => span.Effect == "focus"), "returning to narration resets to the configured default effect");
-            Require(segments.All(segment => !string.IsNullOrWhiteSpace(segment.Text)) && response.Content.Contains("Example NPC: Good to see you.", StringComparison.Ordinal), "presentation contains no empty speaker rows and keeps prose in one logical response");
+            Require(segments.All(segment => !string.IsNullOrWhiteSpace(segment.Text)) && response.Content.Contains("Example NPC: Ah, you look at me.", StringComparison.Ordinal), "presentation contains no empty speaker rows and keeps prose in one logical response");
             Require(segments.Select(segment => segment.Id).Distinct().Count() == segments.Count, "each live presentation segment receives a stable opaque identity");
             Require(!response.Content.Contains("[[smoke]]", StringComparison.Ordinal) && !response.Content.Contains("[[speaker:", StringComparison.Ordinal), "speaker and effect commands are not persisted as visible prose");
         }
@@ -1780,7 +1779,7 @@ internal static partial class Checks
             state.Endpoint = server.Endpoint;
             await state.SendAsync("Continue the scene.", new LlamaClient());
             var response = state.Current!.Lines.Last(line => line.Role == "assistant");
-            Require(response.PresentationSegments!.All(segment => segment.Speaker == "GM") && response.Content.Contains("Good to see you.", StringComparison.Ordinal), "disabled Character Speakers hide speaker markers and preserve all prose under GM");
+            Require(response.PresentationSegments!.All(segment => segment.Speaker == "GM") && response.Content.Contains("Ah, you look at me.", StringComparison.Ordinal), "disabled Character Speakers hide speaker markers and preserve all prose under GM");
             var prompt = (string)server.Requests[0]["messages"]![0]!["content"]!;
             var presentationTool = server.Requests[0]["tools"]!.AsArray().Single(tool => (string?)tool?["function"]?["name"] == "present_response");
             Require(!prompt.Contains("CHARACTER SPEAKERS:", StringComparison.Ordinal)

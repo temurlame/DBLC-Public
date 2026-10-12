@@ -11,30 +11,30 @@ internal static partial class Checks
         var folder = Path.Combine(temporary, "cross-session-chronicle");
         var campaign = new Campaign { Name = "Cross-session test" };
         var previous = new Conversation { CampaignId = campaign.Id, SessionNumber = 0, Title = "First Session", IsEnded = true, Lines = [
-            new ChatLine { Role = "user", Sequence = 1, Content = "We reached the arch gate." },
-            new ChatLine { Role = "assistant", Sequence = 2, Content = "The arch door is sealed." },
-            new ChatLine { Role = "assistant", Sequence = 3, Content = "The creature fell in the shed basement near the arch." }
+            new ChatLine { Role = "user", Sequence = 1, Content = "We reached the church gate." },
+            new ChatLine { Role = "assistant", Sequence = 2, Content = "The church door is sealed." },
+            new ChatLine { Role = "assistant", Sequence = 3, Content = "The Mucous Lurker fell in the church cellar." }
         ] };
         var current = new Conversation { CampaignId = campaign.Id, SessionNumber = 1, PreviousSessionNumber = 0, Title = "Second Session", Lines = [
-            new ChatLine { Role = "user", Sequence = 1, Content = "What happened at the arch?" }
+            new ChatLine { Role = "user", Sequence = 1, Content = "What happened at the church?" }
         ] };
         var otherCampaign = new Campaign { Name = "Separate campaign" };
         var unrelated = new Conversation { CampaignId = otherCampaign.Id, SessionNumber = 0, Title = "Unrelated", Lines = [
-            new ChatLine { Role = "user", Sequence = 1, Content = "The arch is in another campaign." }
+            new ChatLine { Role = "user", Sequence = 1, Content = "The church is in another campaign." }
         ] };
         campaign.SessionOrder.AddRange([previous.Id, current.Id]);
         var store = new ConversationStore(Path.Combine(folder, "state"));
         store.Save(new SavedState("local", "fixture", "", null, [previous, current, unrelated], [campaign, otherCampaign], campaign.Id));
         var archivePath = Path.Combine(folder, "archive.db");
         var archive = new ChronicleArchiveStore(archivePath);
-        archive.Archive(previous.Id, [new ChatLine { Role = "assistant", Sequence = 3, Content = "The creature fell in the shed basement near the arch." }]);
+        archive.Archive(previous.Id, [new ChatLine { Role = "assistant", Sequence = 3, Content = "The Mucous Lurker fell in the church cellar." }]);
         var state = new AppState(store, new LibraryService(), archive,
             Isolate(new ChronicleImageAssetStore(), "_root", Path.Combine(folder, "campaigns")),
             Isolate(new CampaignAgendaAuditStore(), "_root", Path.Combine(folder, "campaigns")),
             Isolate(new PlayerImageAssetStore(), "_root", Path.Combine(folder, "campaigns")));
         state.Select(state.Conversations.Single(item => item.Id == current.Id));
 
-        var searchArgs = JsonSerializer.Serialize(new { query = "arch" });
+        var searchArgs = JsonSerializer.Serialize(new { query = "church" });
         var readArgs = JsonSerializer.Serialize(new { session_id = previous.Id.ToString("D"), line_ids = new[] { 1 } });
         using var server = new ModelStub((request, pass) => Response(request, pass));
         string Response(JsonObject request, int pass)
@@ -43,10 +43,10 @@ internal static partial class Checks
             if (pass == 1) return Calls(("read_chronicle", readArgs));
             var body = request["messages"]!.ToJsonString();
             var handle = Regex.Match(body, @"Source handle: ([0-9a-f]{8}-[1-9][0-9]*)").Groups[1].Value;
-            return Text($"You were last outside the arch. [[cite:{handle}]]");
+            return Text($"You were last outside the church. [[cite:{handle}]]");
         }
         state.Endpoint = server.Endpoint;
-        await state.SendAsync("Look back at the arch scene.", new LlamaClient());
+        await state.SendAsync("Look back at the church scene.", new LlamaClient());
 
         var tools = server.Requests[0]["tools"]!.ToJsonString();
         Require(tools.Contains("read_previous_session_ending") && tools.Contains("session_number") && tools.Contains("session_id"),
@@ -59,8 +59,8 @@ internal static partial class Checks
             && Regex.Matches(searchOutput, Regex.Escape($"chronicle_id: {previous.Id:N}:3")).Count == 1 && searchOutput.Length < 4000,
             "archive overlap does not duplicate a message and search output stays bounded");
         var readOutput = server.Requests[2]["messages"]!.AsArray().Last(item => (string?)item?["role"] == "tool")!["content"]!.ToString();
-        Require(readOutput.Contains("We reached the arch gate") && readOutput.Contains("The arch door is sealed")
-            && !readOutput.Contains("What happened at the arch"),
+        Require(readOutput.Contains("We reached the church gate") && readOutput.Contains("The church door is sealed")
+            && !readOutput.Contains("What happened at the church"),
             "focused read resolves the requested Session and returns its match plus a neighboring message");
         var cited = state.Current!.Lines.Last(line => line.Role == "assistant");
         Require(cited.SourceReferences?.Count == 1 && cited.SourceReferences[0].ConversationId == previous.Id
@@ -69,7 +69,7 @@ internal static partial class Checks
             && state.GetCitedArchiveExcerpt(cited.SourceReferences[0]).Select(line => line.Sequence).SequenceEqual([1L, 2L]),
             "a substantive unarchived read creates a working Chronicle citation to its actual source Session");
 
-        var filteredSearch = JsonSerializer.Serialize(new { query = "arch", session_number = 0 });
+        var filteredSearch = JsonSerializer.Serialize(new { query = "church", session_number = 0 });
         using var filterServer = new ModelStub((_, pass) => pass == 0 ? Calls(("search_chronicle", filteredSearch)) : Text("Found it."));
         state.Endpoint = filterServer.Endpoint;
         await state.SendAsync("Search the first Session only.", new LlamaClient());
@@ -82,7 +82,7 @@ internal static partial class Checks
         state.Endpoint = previousEndingServer.Endpoint;
         await state.SendAsync("What happened immediately before this Session?", new LlamaClient());
         var ending = previousEndingServer.Requests[1]["messages"]!.AsArray().Last(item => (string?)item?["role"] == "tool")!["content"]!.ToString();
-        Require(ending.Contains("arch gate") && ending.Contains("arch door") && ending.Length < 4000,
+        Require(ending.Contains("church gate") && ending.Contains("church door") && ending.Length < 4000,
             "direct previous-Session-ending read returns a small recent passage without keyword search");
 
         archive.Archive(previous.Id, Enumerable.Range(20, 8).Select(index => new ChatLine
@@ -91,24 +91,24 @@ internal static partial class Checks
         }).ToList());
         state.Conversations.Single(item => item.Id == previous.Id).Lines.Add(new ChatLine
         {
-            Role = "assistant", Sequence = 50, Content = "The iron token was placed on the worktable."
+            Role = "assistant", Sequence = 50, Content = "The copper ring was placed on the anvil."
         });
         using (var rankingServer = new ModelStub((_, pass) => pass == 0
-            ? Calls(("search_chronicle", "{\"query\":\"iron token\"}")) : Text("Found the exact match.")))
+            ? Calls(("search_chronicle", "{\"query\":\"copper ring\"}")) : Text("Found the exact match.")))
         {
             state.Endpoint = rankingServer.Endpoint;
-            await state.SendAsync("Find the earlier passage.", new LlamaClient());
+            await state.SendAsync("Find the distinctive ring passage.", new LlamaClient());
             var rankingResult = rankingServer.Requests[1]["messages"]!.AsArray().Last(item => (string?)item?["role"] == "tool")!["content"]!.ToString();
             Require(rankingResult.Split('\n', StringSplitOptions.RemoveEmptyEntries)[0].Contains($"chronicle_id: {previous.Id:N}:50", StringComparison.Ordinal),
                 "exact active Chronicle match ranks ahead of weaker archived matches");
         }
         state.Conversations.Single(item => item.Id == previous.Id).Lines.AddRange(Enumerable.Range(51, 8).Select(index => new ChatLine
         {
-            Role = "assistant", Sequence = index, Content = "A iron item was mentioned without a clasp."
+            Role = "assistant", Sequence = index, Content = "A silver item was mentioned without a clasp."
         }));
-        archive.Archive(previous.Id, [new ChatLine { Role = "assistant", Sequence = 60, Content = "The iron clasp secured the cloak." }]);
+        archive.Archive(previous.Id, [new ChatLine { Role = "assistant", Sequence = 60, Content = "The silver clasp secured the cloak." }]);
         using (var reverseRankingServer = new ModelStub((_, pass) => pass == 0
-            ? Calls(("search_chronicle", "{\"query\":\"iron clasp\"}")) : Text("Found the archived exact match.")))
+            ? Calls(("search_chronicle", "{\"query\":\"silver clasp\"}")) : Text("Found the archived exact match.")))
         {
             state.Endpoint = reverseRankingServer.Endpoint;
             await state.SendAsync("Find the matching clasp passage.", new LlamaClient());
@@ -118,7 +118,7 @@ internal static partial class Checks
         }
         var focusedArchived = archive.GetArchivedLines(previous.Id, [3L, 60L]);
         Require(focusedArchived.Select(line => line.Sequence).SequenceEqual([3L, 60L])
-            && focusedArchived[0].ContextContent.Contains("creature", StringComparison.Ordinal)
+            && focusedArchived[0].ContextContent.Contains("Mucous Lurker", StringComparison.Ordinal)
             && archive.GetArchivedTail(previous.Id, 2).Select(line => line.Sequence).SequenceEqual([27L, 60L]),
             "bounded archive sequence and tail queries preserve ordering across gaps and full line content");
 
@@ -140,7 +140,7 @@ internal static partial class Checks
         await state.SendAsync("", new LlamaClient());
         var emptyReadOutput = emptyReadServer.Requests[1]["messages"]!.AsArray()
             .Last(item => (string?)item?["role"] == "tool")!["content"]!.ToString();
-        Require(emptyReadOutput.Contains("What happened at the arch?", StringComparison.Ordinal)
+        Require(emptyReadOutput.Contains("What happened at the church?", StringComparison.Ordinal)
             && emptyReadOutput.Contains("Continue normally.", StringComparison.Ordinal)
             && state.Current.Lines.Count(line => line.Role == "user") == priorUserCount,
             "Empty Send reads both archived and active earlier current-Session messages without storing a blank player line");

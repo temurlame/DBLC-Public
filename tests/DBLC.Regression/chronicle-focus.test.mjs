@@ -141,7 +141,7 @@ test('speaker segment streaming hands off once and ignores a delayed stale strea
     flush();
     assert.equal(root.textContent, opening, 'initial GM narration is present in the live DOM');
 
-    const speakerText = 'Example NPC checks the map. They nod once. A third sentence follows.';
+    const speakerText = 'Example NPC studies your face. She lowers her voice. A third sentence follows.';
     for (let i = 0; i < speakerText.length; i += 7) {
         effects.sync(root, key, 2 + i, opening + speakerText.slice(0, i + 7), true, 'focus', []);
         flush();

@@ -52,7 +52,7 @@ body{overscroll-behavior:none}
 .mobile-messages{width:100%;min-height:0;padding:18px 14px 22px;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 .mobile-messages .messages-content{display:flow-root;min-height:1px}
 .mobile-messages .message{gap:10px;margin-bottom:20px}
-.mobile-messages{--chronicle-avatar-base:26px}
+.mobile-messages{--chronicle-avatar-base:40px}
 .mobile-messages .message-content{font-size:14px;line-height:1.7}
 .mobile-messages .message-meta{font-size:9px}
 .mobile-messages .session-opening-summary,.mobile-messages .archive-summary-card,.mobile-messages .campaign-record-message{margin-left:0;margin-right:0}

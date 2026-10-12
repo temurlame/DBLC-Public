@@ -17,7 +17,16 @@
   transform-origin: top left;
 }
 
-.typing > .dblc-sigil { margin-top: -8px; }
+.typing-avatar {
+  display: grid;
+  flex: 0 0 calc(var(--chronicle-avatar-base, 40px) * var(--chronicle-text-scale, 1));
+  width: calc(var(--chronicle-avatar-base, 40px) * var(--chronicle-text-scale, 1));
+  height: calc(var(--chronicle-avatar-base, 40px) * var(--chronicle-text-scale, 1));
+  place-items: center;
+  overflow: visible;
+}
+
+.typing-avatar .dblc-sigil { margin-left: -10px; }
 
 .dblc-sigil .gm-thinking-sigil-float {
   display: inline-block;

@@ -41,6 +41,10 @@
                     {
                         <article class="campaign-record-message"><div class="campaign-record-label">CAMPAIGN RECORD</div><div class="campaign-record-content message-content"><ChronicleText Text="@line.Content" /></div></article>
                     }
+                    else if (State.Busy && State.GmThinkingSigilEnabled && line.Role == "assistant" && string.IsNullOrEmpty(line.Content) && line.PresentationSegments is not { Count: > 0 } && _chronicle.Lines.LastOrDefault()?.Id == line.Id)
+                    {
+                        @* The aligned thinking row below represents this still-empty GM response. *@
+                    }
                     else
                     {
                         <article @key="line.Id" class="message @(line.Role == "user" ? "user-message" : "gm-message")">
@@ -101,7 +105,7 @@
                     <div class="typing">
                         @if (State.GmThinkingSigilEnabled)
                         {
-                            <GmThinkingSigil />
+                            <div class="typing-avatar"><GmThinkingSigil Size="54" /></div>
                         }
                         else
                         {

@@ -75,10 +75,10 @@ internal static partial class Checks
             "source attribution: a closed overlength malformed candidate stays literal when delivered in one chunk");
 
         var (state, store) = AuditState(temporary, "source-attribution", workbench: false);
-        state.AddGmNote(state.ActiveCampaignId, "basement bargain\nThe old price was iron.");
+        state.AddGmNote(state.ActiveCampaignId, "Cellar bargain\nThe old price was silver.");
         var id = state.GetGmNotes(state.ActiveCampaignId).Single().Id;
         using (var server = new ModelStub((request, pass) => pass == 0
-            ? Calls(("search_gm_notes", "{\"query\":\"basement\"}"))
+            ? Calls(("search_gm_notes", "{\"query\":\"Cellar\"}"))
             : Text("I found a title, but have not read the note. [[cite:deadbeef-1]]")))
         {
             state.Endpoint = server.Endpoint;
@@ -102,24 +102,24 @@ internal static partial class Checks
         }
         using (var server = new ModelStub((request, pass) => pass == 0
             ? Calls(("read_gm_note", $"{{\"note_id\":\"{id:N}\"}}"))
-            : Text("The price is iron. [[cite:" + Regex.Match(request["messages"]!.ToJsonString(), @"Source handle: ([a-f0-9]+-\d+)").Groups[1].Value + "]]")))
+            : Text("The price is silver. [[cite:" + Regex.Match(request["messages"]!.ToJsonString(), @"Source handle: ([a-f0-9]+-\d+)").Groups[1].Value + "]]")))
         {
             state.Endpoint = server.Endpoint;
             await state.SendAsync("What is the price?", new LlamaClient());
             var answer = state.Current!.Lines.Last();
-            Require(answer.Content == "The price is iron. " && answer.SourceReferences?.Single().NoteId == id,
+            Require(answer.Content == "The price is silver. " && answer.SourceReferences?.Single().NoteId == id,
                 "source attribution: cited note appears once and marker never enters Chronicle prose");
             Require(store.Load().Conversations!.Single().Lines.Last().SourceReferences?.Single().NoteId == id,
                 "source attribution: selected note reference persists through Session reload");
         }
         using (var server = new ModelStub((request, pass) => pass == 0
             ? Calls(("read_gm_note", $"{{\"note_id\":\"{id:N}\"}}"))
-            : Calls(("present_response", "{\"segments\":[{\"speaker\":\"GM\",\"text\":\"The price remains iron. [[cite:" +
+            : Calls(("present_response", "{\"segments\":[{\"speaker\":\"GM\",\"text\":\"The price remains silver. [[cite:" +
                 Regex.Match(request["messages"]!.ToJsonString(), @"Source handle: ([a-f0-9]+-\d+)").Groups[1].Value + "]]\"}]}"))))
         {
             state.Endpoint = server.Endpoint;
             await state.SendAsync("Present it.", new LlamaClient());
-            Require(state.Current!.Lines.Last().Content.Contains("The price remains iron.") &&
+            Require(state.Current!.Lines.Last().Content.Contains("The price remains silver.") &&
                 !state.Current!.Lines.Last().Content.Contains("[[cite:") && state.Current!.Lines.Last().SourceReferences?.Count == 1,
                 "source attribution: present_response selects a source without persisting markers");
         }
@@ -172,11 +172,11 @@ internal static partial class Checks
         }
         WritePdf(pdfPath);
         File.WriteAllText(Path.Combine(libraryFolder, "Rules.json"),
-            "{\"schema_version\":\"1.0\",\"book\":{\"title\":\"Rules\",\"source_pdf\":\"Rules.pdf\"},\"sections\":[{\"id\":\"creation\",\"title\":\"Creation\",\"page_start\":1,\"page_end\":1,\"content\":\"A iron gate key.\"}]}");
+            "{\"schema_version\":\"1.0\",\"book\":{\"title\":\"Rules\",\"source_pdf\":\"Rules.pdf\"},\"sections\":[{\"id\":\"creation\",\"title\":\"Creation\",\"page_start\":1,\"page_end\":1,\"content\":\"A silver gate key.\"}]}");
         state.RefreshLibrary();
         using (var server = new ModelStub((request, pass) => pass == 0
             ? Calls(("read_json_sections", $"{{\"book_id\":{System.Text.Json.JsonSerializer.Serialize(pdfPath)},\"section_ids\":[\"creation\"]}}"))
-            : Text("The section describes a iron key. [[cite:" + Regex.Match(request["messages"]!.ToJsonString(), @"Source handle: ([a-f0-9]+-\d+)").Groups[1].Value + "]]")))
+            : Text("The section describes a silver key. [[cite:" + Regex.Match(request["messages"]!.ToJsonString(), @"Source handle: ([a-f0-9]+-\d+)").Groups[1].Value + "]]")))
         {
             state.Endpoint = server.Endpoint;
             await state.SendAsync("Read the companion section.", new LlamaClient());
@@ -200,8 +200,8 @@ internal static partial class Checks
         var historyRoot = Path.Combine(temporary, "source-history-integration");
         var historyCampaign = new Campaign { Name = "History source" };
         var historySession = new Conversation { CampaignId = historyCampaign.Id, Title = "Session three", SessionNumber = 3,
-            Lines = [new ChatLine { Sequence = 20, Role = "user", Content = "The shed gate." },
-                new ChatLine { Sequence = 21, Role = "assistant", Content = "Its key is iron." }], NextSequence = 22 };
+            Lines = [new ChatLine { Sequence = 20, Role = "user", Content = "The chapel gate." },
+                new ChatLine { Sequence = 21, Role = "assistant", Content = "Its key is silver." }], NextSequence = 22 };
         historyCampaign.SessionOrder.Add(historySession.Id);
         var historyStateStore = new ConversationStore(Path.Combine(historyRoot, "state"));
         historyStateStore.Save(new SavedState("local", "fixture", "", null, [historySession], [historyCampaign], historyCampaign.Id));
@@ -215,7 +215,7 @@ internal static partial class Checks
             Isolate(new PlayerImageAssetStore(), "_root", Path.Combine(historyRoot, "campaigns")));
         historyState.Select(historyState.Conversations.Single());
         using (var server = new ModelStub((request, pass) => pass == 0
-            ? Calls(("search_chronicle", "{\"query\":\"iron\"}"))
+            ? Calls(("search_chronicle", "{\"query\":\"silver\"}"))
             : Text("The search suggests a key, but I have not read the archive.")))
         {
             historyState.Endpoint = server.Endpoint;
@@ -226,7 +226,7 @@ internal static partial class Checks
         }
         using (var server = new ModelStub((request, pass) => pass == 0
             ? Calls(("read_chronicle", "{\"line_ids\":[21]}"))
-            : Text("The key is iron. [[cite:" + Regex.Match(request["messages"]!.ToJsonString(), @"Source handle: ([a-f0-9]+-\d+)").Groups[1].Value + "]]")))
+            : Text("The key is silver. [[cite:" + Regex.Match(request["messages"]!.ToJsonString(), @"Source handle: ([a-f0-9]+-\d+)").Groups[1].Value + "]]")))
         {
             historyState.Endpoint = server.Endpoint;
             await historyState.SendAsync("Recall the key.", new LlamaClient());
