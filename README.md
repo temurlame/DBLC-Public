@@ -114,4 +114,4 @@ Imported image maps remain supported.
 
 ## Limitations
 
-DBLC is a source-built Windows application; it currently has no signed installer. Model behavior and tool reliability vary by model, chat template and server version. DBLC is MIT-licensed; third-party components retain their own terms. See `LICENSE` and `THIRD-PARTY-NOTICES.md`.
+DBLC is currently distributed as a portable Windows application and as MIT-licensed source code. There is no signed installer. Model behavior and tool reliability vary by model, chat template and server version. DBLC is MIT-licensed; third-party components retain their own terms. See `LICENSE` and `THIRD-PARTY-NOTICES.md`.
