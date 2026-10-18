@@ -12,9 +12,11 @@ The dice roller supports d4 through d20. You can select a die for your next roll
 
 ## Screenshots
 
-These screenshots use a fictional demonstration campaign and an original generated map.
+The Chronicle and map screenshots use fictional demonstration content. Campaign text in the Player Sheet pop-out screenshot is censored.
 
 ![Chronicle with fictional player and NPC dialogue](screenshots/01-chronicle.jpg)
+
+![Player Sheet pop-out with campaign text censored](screenshots/04-player-sheet-popout-censored.png)
 
 ![Imported fictional map in DBLC's image viewer](screenshots/03-imported-map-fictional-demo.jpg)
 
